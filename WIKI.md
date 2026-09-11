@@ -19,11 +19,13 @@
 | `scripts/watch.mjs` | Key 月度:分钟账单增量同步(水位线+缺口窗口+小时桶幂等合并+40页断点续拉)→ 协议 keys 段(pct 降序) | ✅ M1 |
 | `scripts/news.mjs` | 资讯:assets/news.json(可插拔数据源)+ butler-news-read.json 已读管理 → 协议 news 段 | ✅ M1 |
 | `scripts/status.mjs` | 聚合器:三模块并行、独立 try/catch 降级;`--json` 协议(输出前自检)/ `--hook` 零请求摘要 / 默认终端大卡片;写 lastResult | ✅ M1 |
-| `scripts/chat2doc/` | 会话归档流水线(extract/format/merge) | ⏳ M3 |
+| `scripts/chat2doc/` | 会话归档流水线:extract.py(rollout JSONL→turns.json,full/delta/tail 缝合+toolCalls 回注)/ format_batch.py(分批+Markdown 防护+ZCode 工具映射)/ merge_batch.py(占位符替换,蓝图 100% 复用)+ 23 个 unittest | ✅ M3 |
+| `scripts/doc-intent.mjs` | 归档意图检测 hook:UserPromptSubmit 主链路(注入任务+消费 intent)/ SessionStart --startup 兜底;10 分钟过期自清 | ✅ M3 |
+| `assets/templates/素材文档.md` | 素材文档格式与摘要规则(外置可编辑,用户改模板即改产出) | ✅ M3 |
 | `scripts/widget/` | WPF 悬浮窗 + 启动分发 | ⏳ M2 |
-| `commands/` | usage / watch / news 三命令 | ✅ M1(doc 待 M3) |
-| `skills/butler/SKILL.md` | 自然语言主入口(四能力) | ✅ M1(Chat2Doc 细节待 M3) |
-| `hooks/hooks.json` | SessionStart → status.mjs --hook(摘要注入) | ✅ M1(悬浮窗拉起待 M2、doc-intent 待 M3) |
+| `commands/` | usage / watch / doc / news 四命令 | ✅ M1+M3 |
+| `skills/butler/SKILL.md` | 自然语言主入口(四能力) | ✅ M1+M3 |
+| `hooks/hooks.json` | SessionStart → status.mjs --hook + doc-intent --startup;UserPromptSubmit → doc-intent | ✅ M1+M3(悬浮窗拉起待 M2) |
 
 ### 2. 核心架构
 
@@ -59,6 +61,22 @@ assets/news.json ──> news.mjs
 2. `news.items` 为全量条目(最新在前),每条带 `read` 布尔;未读数 `news.unread`
 3. 顶层带 `protocolVersion: 1`;模块失败 → 对应段 null/[] 且 `errors[]` 记 `{module, message}`
 
+### 7. Chat2Doc 流水线(as-built)
+
+rollout 格式(ZCode 3.11.2 实测,**勘误 PROJECT.md §6.3**):messages 在 `request` 顶层(非
+`request.body`);行有三种快照 full(offset=0 全量)/ delta(自 offset 新增)/ tail(超窗后 64 条
+尾部窗口),`messageCount` 为累计总数——重建 = 按 offset+i 写全局索引缝合;**request 快照里
+assistant 只有 text/reasoning,tool_use 块只存在于各行 `response.toolCalls`**,按行 messageCount
+回注到对应 assistant 消息;最后一行 response 为"进行中回复"兜底追加。
+"当前会话" = rollout 最新修改文件;活跃尾部半行跳过。
+
+```bash
+py chat2doc/extract.py auto|<jsonl> <work>/turns.json     # 回合分组+注入过滤+toolCallId 配对
+py chat2doc/format_batch.py <work>/turns.json <work>      # ~150 parts/批不切断回合
+#   (人工/模型)逐批 hints-N.txt → repl-N.txt 摘要
+py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
+```
+
 ### 6. 用户文件清单
 
 | 文件 | 写方 | 说明 |
@@ -74,6 +92,14 @@ assets/news.json ──> news.mjs
 ## 二、变更历史
 
 (按时间倒序,每条含:背景 / 改动 / 影响范围 / 回滚方案)
+
+### [v0.1.0-M3] 2026-09-11 M3 Chat2Doc 流水线上线
+
+- **背景**:PROJECT.md §11 里程碑 M3:会话归档(只做素材归档,D7)。
+- **改动**:新增 chat2doc/ 三脚本(extract 全新重写、format/merge 移植蓝图)+ 23 个 Python 单测;assets/templates/素材文档.md 外置模板;doc-intent.mjs 双事件 hook;commands/doc.md;hooks.json 挂 UserPromptSubmit+SessionStart 兜底;SKILL 能力三写实。
+- **影响范围**:纯新增。extract 实测勘误了 PROJECT.md §6.3 对 rollout 格式的两处描述(messages 路径、tool_use 位置),勘误记录于 DEV RECORD 与本文件 §7,PROJECT 冻结不改。
+- **验证**:两个真实会话端到端产出素材文档(桌面/归档/:设计会话 23 回合 1028 行、开发会话 1 回合 102 工具);doc-intent 新鲜/过期/无意图三态实测;Node 45+Python 23 全绿。
+- **回滚方案**:`git revert` M3 commit;已产出的素材文档在仓库外,不受影响。
 
 ### [v0.1.0-M1] 2026-09-11 M1 数据内核上线
 

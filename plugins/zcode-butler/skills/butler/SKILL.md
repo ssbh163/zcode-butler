@@ -36,15 +36,20 @@ node "${ZCODE_PLUGIN_ROOT}/scripts/watch.mjs"
 
 用户说"归档当前会话 / 把这次对话整理成文档 / 写开发记录"等:运行 Chat2Doc 流水线,把 ZCode 会话转录
 (`~/.zcode/cli/rollout/model-io-sess_*.jsonl`)加工成结构化素材文档。**只做素材归档,不做二次成文。**
+完整步骤与命令模板见 `commands/doc.md`;摘要规则与产物骨架见 `assets/templates/素材文档.md`(外置可编辑)。
 
-流程(详细步骤与模板见 `assets/templates/`):
+流程(Windows 上 Python 一律 `py` 调用):
 
-1. `py "${ZCODE_PLUGIN_ROOT}/scripts/chat2doc/extract.py" <会话jsonl或auto>` → 提取对话回合(过滤注入块/标题任务/thinking)
-2. `py "${ZCODE_PLUGIN_ROOT}/scripts/chat2doc/format_batch.py"` → 分批(~150 parts/批,不切断回合)生成 semi-N.md + hints-N.txt
-3. 对每批执行摘要(由你作为子任务完成,按 hints 中的类型规则)得到 repl-N.md
-4. `py "${ZCODE_PLUGIN_ROOT}/scripts/chat2doc/merge_batch.py"` → 合并去重,产出最终素材文档
+1. `py "${ZCODE_PLUGIN_ROOT}/scripts/chat2doc/extract.py" auto|<jsonl> <work>/turns.json`
+   —— 重建对话(full/delta/tail 缝合 + toolCalls 回注),过滤注入块/标题任务/thinking,按真实用户消息分回合
+2. `py "${ZCODE_PLUGIN_ROOT}/scripts/chat2doc/format_batch.py" <work>/turns.json <work>`
+   —— 约 150 parts/批不切断回合,产出 semi-N.md(正文+占位符)与 hints-N.txt(工具提示)
+3. 你逐批读 hints-N.txt 写 repl-N.txt(每行 `编号→一句话摘要`,相邻相似合并,禁止贴完整命令/输出)
+4. `py "${ZCODE_PLUGIN_ROOT}/scripts/chat2doc/merge_batch.py" <work>/semi-N.md <work>/repl-N.txt <work>/batch-N.md`
+   —— 替换占位符、删合并行、清残留
 
-产物结构、质量要求以 `assets/templates/素材文档.md` 为准(外置可编辑,用户改模板即改产出格式)。
+最终产物:按模板拼 `YYYY-MM-DD-<主题>-素材.md` 到输出目录(默认 `~/Desktop/归档`),含会话概览 3-5 句。
+归档意图也可能由悬浮窗发起(doc-intent hook 注入任务上下文),按同一流程执行。
 
 ## 能力四:活动资讯
 

@@ -16,6 +16,25 @@
 
 ## 开发日志(倒序)
 
+### 2026-09-11 M3 Chat2Doc 交付(extract/format/merge + 模板 + doc-intent + 端到端验证)
+
+**范围**:chat2doc/ 三脚本 + 23 个 unittest、assets/templates/素材文档.md、doc-intent.mjs、commands/doc.md、hooks.json 扩展(UserPromptSubmit + SessionStart 兜底)、SKILL 能力三写实。
+
+**重要勘误**:PROJECT.md §6.3 对 rollout 格式的描述与实测(3.11.2)有两处出入,extract.py 按实测实现,PROJECT 冻结不改:
+1. messages 在 `request` 顶层,不在 `request.body.messages`
+2. request 快照里 assistant 消息**只含 text/reasoning,没有 tool_use 块**;工具名+完整参数只存在于每行 `response.toolCalls`
+另发现 PROJECT 未记载的事实:行有三种 messagesKind——full(offset=0 全量)/ delta(自 offset 新增)/ tail(上下文超窗后的 64 条尾部窗口);`request.messageCount` 为累计消息总数,且**恰好等于该行响应 assistant 消息的全局索引**(据此把 toolCalls 回注)。
+
+**问题1**:extract 首跑只提出 2 个工具(实际 102)。
+**根因**:按 §6.3 的描述从 request.messages 找 tool_use 块,而那里根本没有(见勘误 2)。
+**解决方案**:两遍重建——第一遍按 offset+i 缝合消息骨架,第二遍按行 messageCount 把 response.toolCalls 回注到对应 assistant 消息;再补最后一行 response 作"进行中回复"。
+**耗时**:40 分钟(含格式探查)。
+
+**端到端验证(DoD)**:两个真实会话完整跑通流水线,产物在 `~/Desktop/归档/`:设计会话(23 回合 86 工具 → 1028 行素材)、当前开发会话(1 回合 102 工具 → 156 行素材),抽查可读性:读者不回原始会话即可理解讨论脉络。
+
+**doc-intent 实测**:新鲜 intent → 注入完整归档任务并消费删除;过期(>10min)→ 静默且自动清理文件;无 intent → 空 additionalContext。UserPromptSubmit 事件在真实会话中的触发由 M2 悬浮窗「开始归档」按钮联调时验证(若不支持,兜底链 SessionStart --startup 已就位)。
+**commit**:见 git log "M3 Chat2Doc"。
+
 ### 2026-09-11 M1 数据内核交付(lib + usage/watch/news/status + 单测 + 四命令)
 
 **范围**:`plugins/zcode-butler/scripts/` 全部 .mjs(lib/api+cache+protocol、usage、watch、news、status)、45 个单测、plugin.json/hooks.json、四命令中三个(usage/watch/news)+ SKILL.md、assets/news.json。doc 命令与 chat2doc/ 留待 M3,悬浮窗留待 M2。
