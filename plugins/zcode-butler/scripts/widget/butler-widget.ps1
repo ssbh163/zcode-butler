@@ -182,10 +182,10 @@ $xamlText = @'
       <MenuItem x:Name="MenuOld"     Header="检测到旧插件悬浮窗在运行,建议退出它" IsEnabled="False" Visibility="Collapsed"/>
     </ContextMenu>
   </Window.ContextMenu>
-  <StackPanel Margin="20,8,4,8" HorizontalAlignment="Right">
-    <!-- 平时态胶囊 -->
-    <Border x:Name="Root" Width="64" CornerRadius="20" Background="#FF161616"
-            BorderBrush="#1FFFFFFF" BorderThickness="1" Padding="6,8,6,8" Cursor="Hand">
+  <StackPanel Margin="20,8,0,8" HorizontalAlignment="Right">
+    <!-- 平时态:嵌入 ZCode 右缘的侧栏条(右缘贴边直角,底色=ZCode 输入框 #2B2B2B) -->
+    <Border x:Name="Root" Width="64" CornerRadius="0" Background="#FF2B2B2B"
+            Padding="6,8,7,8" Cursor="Hand">
       <StackPanel x:Name="NormalPanel">
         <StackPanel x:Name="Ring5h" Tag="5h" />
         <StackPanel x:Name="RingWeekly" Tag="weekly" />
@@ -196,14 +196,14 @@ $xamlText = @'
         <Grid x:Name="BellRow" Height="34" />
       </StackPanel>
     </Border>
-    <!-- 把手态(收起后):细竖条 -->
-    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="5" Background="#CC1D1D1D"
-            BorderBrush="#1FFFFFFF" BorderThickness="1" Visibility="Collapsed" Cursor="Hand">
+    <!-- 把手态(收起后):细竖条,贴右缘 -->
+    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="3,0,0,3" Background="#CC2B2B2B"
+            HorizontalAlignment="Right" Visibility="Collapsed" Cursor="Hand">
       <TextBlock Text="⟨" FontSize="11" Foreground="#99FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
     <!-- 设置小点:平时 10px 圆点,悬停展开为齿轮 -->
     <Border x:Name="GearDot" Width="10" Height="10" CornerRadius="5" Background="#66FFFFFF"
-            HorizontalAlignment="Center" Margin="0,10,8,0" Cursor="Hand" ToolTip="码管家设置">
+            HorizontalAlignment="Right" Margin="0,10,0,0" Cursor="Hand" ToolTip="码管家设置">
       <TextBlock x:Name="GearIcon" Text="" FontSize="11" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
   </StackPanel>
@@ -973,7 +973,8 @@ function Position-Follow {
     if (($wr.Right - $wr.Left) -gt 0) { $wphys = $wr.Right - $wr.Left }
   }
   if ($null -eq $script:followOffsetY) { $script:followOffsetY = 40 }
-  $x = $r.Right - $wphys + 25
+  # 嵌入贴边:悬浮窗右缘与 ZCode 右缘重合(侧栏条形态,不外凸)
+  $x = $r.Right - $wphys
   $y = $r.Top + [int]$script:followOffsetY
   Move-WidgetPhysical $x $y
 }

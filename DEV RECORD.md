@@ -20,6 +20,15 @@
 
 ## 开发日志(倒序)
 
+### 2026-09-11 [用户验收反馈] 悬浮窗改嵌入侧栏形态
+
+**问题**:用户提三点——①底色漆黑(当时 #FF161616)要换成 ZCode 输入框的颜色;②要紧贴 ZCode 右侧而不是突出在外面;③上下两端与右侧的衔接要参考用户给的图(嵌入、直角、无缝)。
+**根因**:初版按 PROJECT.md §4.1 的"贴屏幕右缘胶囊"实现(圆角 20 + 外凸 + 呼吸留白),与用户实际审美(参考图:嵌入式侧栏条)不一致。
+**解决方案**:①PrintWindow 截 ZCode 主窗对输入框区域多点采样,众数色 = #2B2B2B(面板)/#161616(内芯),取 #2B2B2B;②Root CornerRadius 20→0、去边框、外层右 margin 0,Position-Follow 的 x 偏移 +25→0(右缘零间隙贴齐 ZCode 右缘);③把手细条/设置小点同步右对齐。气泡/面板弹层仍是浮层(功能性弹窗,保持现状)。
+**验证**:真机截图——悬浮窗物理右缘 3495 与 ZCode 右缘完全重合;视觉模型确认"中性灰底色、零缝隙、上下直角、嵌入侧栏观感、无瑕疵"。
+**耗时**:40 分钟(探色 10 + 改造 10 + 验证 20)。
+**commit**:见 git log "悬浮窗嵌入侧栏形态"。
+
 ### 2026-09-11 M2 悬浮窗交付(butler-widget.ps1 1206 行 + 启动分发 + hooks 接入)
 
 **范围**:`scripts/widget/` 三件(butler-widget.ps1 / widget-launch.mjs / widget-launch.vbs);hooks.json SessionStart 首位挂 widget-launch。UI 全量:三大环(进度弧+图标+百分比)、Key 渐进环(1→3,+N 徽标)、铃铛(未读红点)、悬停气泡、齿轮折叠配置卡(归档写 intent+剪贴板兜底 / Key 增删写 butler.json / 刷新频率+停靠+位置重置)、资讯面板(全读)、把手(双击收起)、右键菜单、Ctrl+Shift+G、单实例+唤醒双通道、110min 定时、WinEvent 跟随(LOCATIONCHANGE + MINIMIZESTART/END,33ms 节流,ZCode 退出退主屏右缘+2.5s 重扫)。

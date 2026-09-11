@@ -66,7 +66,7 @@ assets/news.json ──> news.mjs
 - 数据:纯渲染壳,`Start-Process node status.mjs --json`(异步+临时文件+UTF8 读取+完整性校验),110 分钟定时 / wake 文件 / 手动刷新
 - 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
 - 交互:悬停气泡 / 齿轮折叠卡(归档写 intent+`/butler:doc` 进剪贴板 / Key 增删写 butler.json / 刷新频率+停靠+位置重置)/ 资讯面板全读 / 双击收起把手 / 右键菜单 / Ctrl+Shift+G / 拖动记物理偏移
-- 配色:深色底为环境灰 #161616(不透明,与桌面/ZCode 深色表面实测同色,胶囊无黑块感);气泡 #1A1A1A / 面板 #1C1C1C 略亮一层保可读性
+- 形态(用户验收驱动,2026-09-11 v2):**嵌入 ZCode 右缘的侧栏条**——右缘与 ZCode 零间隙贴齐(x = zRight − wphys)、上下直角、无外凸;底色 #FF2B2B2B(实测 ZCode 输入框面板色,PrintWindow 众数采样);把手态细条右对齐 #CC2B2B2B;气泡 #1A1A1A / 面板 #1C1C1C 略亮一层保可读性
 - 生命周期:互斥量 `Global\ZCode-Butler-Widget` + EventWaitHandle + wake 文件双通道;脚本被删自动退出;位置/环数/把手态记 `butler-widget.pos.json`
 - 已知限制:设置项改后未持久化;图标为 emoji 字符(待换 Path 矢量);**交互细项待真机人工验收**
 
@@ -109,6 +109,14 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 - **影响范围**:仅 widget 颜色常量;无协议/逻辑改动。
 - **验证**:真机逐像素采样——胶囊空白区三点均 #161616,与四周(桌面/ZCode 表面)完全一致;略亮的值均为环/图标/小点等控件本体。
 - **回滚方案**:revert 本 commit 即回到原蓝黑底。
+
+### [v0.1.0-M2.1] 2026-09-11 悬浮窗视觉修订:嵌入侧栏形态(用户反馈)
+
+- **背景**:用户验收 M2 后提三点——底色漆黑要换 ZCode 输入框同色;要贴 ZCode 右侧不外凸;上下两端与右侧衔接要像参考图(直角、无缝)。
+- **改动**:butler-widget.ps1——Root 底色 #FF161616→#FF2B2B2B(PrintWindow 实测 ZCode 输入框面板色)、CornerRadius 20→0 去边框;外层右 margin 4→0(Root 贴窗口右缘);Position-Follow x=zRight−wphys+25→zRight−wphys(零间隙嵌入);把手细条右对齐 CornerRadius 3,0,0,3;设置小点右对齐。
+- **影响范围**:仅悬浮窗视觉与吸附偏移,协议/数据链路不动。
+- **验证**:真机截图确认——右缘 3495 与 ZCode 右缘重合零缝隙;底色中性灰;上下直角;左侧过渡自然,整体呈嵌入侧栏观感。
+- **回滚方案**:revert 本 commit 即回到外凸胶囊形态。
 
 ### [v0.1.0-M2] 2026-09-11 M2 悬浮窗上线
 
