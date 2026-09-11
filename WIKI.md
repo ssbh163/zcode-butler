@@ -66,9 +66,9 @@ assets/news.json ──> news.mjs
 - 数据:纯渲染壳,`Start-Process node status.mjs --json`(异步+临时文件+UTF8 读取+完整性校验),110 分钟定时 / wake 文件 / 手动刷新
 - 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
 - 交互:悬停气泡 / 齿轮折叠卡(归档写 intent+`/butler:doc` 进剪贴板 / Key 增删写 butler.json / 刷新频率+停靠+位置重置)/ 资讯面板全读 / 双击收起把手 / 右键菜单 / Ctrl+Shift+G / 拖动记物理偏移
-- 形态(用户验收驱动,2026-09-11 v2):**嵌入 ZCode 右缘的侧栏条**——右缘与 ZCode 零间隙贴齐(x = zRight − wphys)、上下直角、无外凸;底色 #FF2B2B2B(实测 ZCode 输入框面板色,PrintWindow 众数采样);把手态细条右对齐 #CC2B2B2B;气泡 #1A1A1A / 面板 #1C1C1C 略亮一层保可读性
+- 形态(用户参考图驱动,2026-09-11 v3,Nothing 风格):**纯黑 D 形胶囊贴 ZCode 右缘**——右缘直边贴齐(x = zRight − wphys)、左侧半圆端(CornerRadius 28,0,0,28),底色 #F20A0A0A;环为细线(大环 42px 线宽 4 / Key 环 30px 线宽 2.8)、平头端帽、底轨实色 #2E2E2E;色阶四档 <50 绿 #4ADE80 / 50-79 黄 #F2E33A / 80-89 橙 #E8722A / ≥90 红;环心与按钮图标统一 **Segoe MDL2 Assets 单色线性字形**(闪电 E945 / 日历 E787 / 电源 E7E8 / 锁 E72E / 铃铛 E7ED / 齿轮 E713 / 错误警告 E7BA),错误态图标切换由 Ctrl 表 Glyph 字段恢复;百分比环下白色 11px Consolas;把手态细条右对齐 #E60A0A0A;齿轮常显 24px 灰底圆钮(悬停放大 28);气泡/面板 #F50A0A0A + #22FFFFFF 细描边
 - 生命周期:互斥量 `Global\ZCode-Butler-Widget` + EventWaitHandle + wake 文件双通道;脚本被删自动退出;位置/环数/把手态记 `butler-widget.pos.json`
-- 已知限制:设置项改后未持久化;图标为 emoji 字符(待换 Path 矢量);**交互细项待真机人工验收**
+- 已知限制:设置项改后未持久化;MDL2 字形在 Win10 以下不存在(本插件限 Win10+ 无碍);**交互细项待真机人工验收**
 
 ### 7. Chat2Doc 流水线(as-built)
 
@@ -101,6 +101,14 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 ## 二、变更历史
 
 (按时间倒序,每条含:背景 / 改动 / 影响范围 / 回滚方案)
+
+### [v0.1.2] 2026-09-11 悬浮窗改 Nothing 风格 D 形胶囊(用户参考图)
+
+- **背景**:用户提供 MIUI 相册截图(Nothing OS 风格贴边组件)作样式参考,要求重新调整悬浮窗样式——取代此前"伪装 ZCode 侧栏"的灰底直角形态。
+- **改动**:butler-widget.ps1——①胶囊改纯黑 #F20A0A0A、左侧半圆端(CornerRadius 28,0,0,28)、右缘直边贴 ZCode(D 形);②环改细线(4/2.8px)+ 平头端帽 + 实色底轨 #2E2E2E;③色阶扩为四档(<50 绿 #4ADE80 / 50-79 黄 #F2E33A / 80-89 橙 #E8722A / ≥90 红);④emoji 图标全换 Segoe MDL2 Assets 白色线性字形(⚡E945/日历E787/电源E7E8/锁E72E/铃铛E7ED/齿轮E713,错误态 E7BA 警告三角,Glyph 字段保证恢复);⑤百分比 11px 纯白;⑥去两条分隔线改间距分组;⑦齿轮小点改常显 24px 灰底圆钮;⑧气泡/资讯/配置面板统一 #F50A0A0A 圆角 12;⑨把手 #E60A0A0A 半圆端。
+- **影响范围**:仅 widget 视觉层(样式常量+XAML+控件工厂);无协议/取数/跟随逻辑改动;MDL2 字形依赖 Win10+(插件环境前提已满足)。
+- **验证**:[scriptblock]::Create 语法过;杀旧实例重启成功;PS SetDpiAwareness 后 CopyFromScreen 高清截屏逐段核对——三环图标(闪电/日历/电源)、锁形、铃铛红点、八齿齿轮全部清晰无豆腐块,D 形左圆角右直边正确,数字可读。
+- **回滚方案**:revert 本 commit 即回到嵌入侧栏灰底形态(#FF2B2B2B 直角)。
 
 ### [v0.1.1] 2026-09-11 悬浮窗深色底改为环境灰
 
