@@ -52,7 +52,7 @@ plugins/zcode-butler/
 ```
 node plugins/zcode-butler/scripts/status.mjs --json     # 聚合协议输出(悬浮窗同源)
 node plugins/zcode-butler/scripts/status.mjs            # 终端卡片
-node --test plugins/zcode-butler/scripts/               # Node 单测
+node --test "plugins/zcode-butler/scripts/**/*.test.mjs"  # Node 单测(目录形式在 Windows 不可用,须递归 glob)
 py -m unittest discover -s plugins/zcode-butler/scripts/chat2doc -p "*_test.py"
 ```
 

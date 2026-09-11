@@ -1,0 +1,35 @@
+{
+  "items": [
+    {
+      "id": "2026-09-11-launch",
+      "title": "码管家(zcode-butler)上线:用量三环 + 多 Key 监控 + 会话归档 + 资讯,四合一悬浮窗",
+      "date": "09-11",
+      "source": "zcode-butler",
+      "level": "info",
+      "url": "https://github.com/",
+      "expiresAt": "2026-12-31"
+    },
+    {
+      "id": "2026-09-10-glm51",
+      "title": "GLM-5.1 系列 Coding Plan 上线,加权计费口径不变(高峰×3)",
+      "date": "09-10",
+      "source": "智谱开放平台",
+      "level": "info",
+      "url": "https://open.bigmodel.cn",
+      "expiresAt": "2026-10-31"
+    },
+    {
+      "id": "2026-09-05-peak",
+      "title": "提醒:工作日 14:00–18:00(北京时间)为高峰时段,token 按 3 倍计入月度额度",
+      "date": "09-05",
+      "source": "zcode-butler",
+      "level": "warn",
+      "expiresAt": ""
+    }
+  ],
+  "channels": [
+    { "name": "智谱开放平台(公告/套餐)", "url": "https://open.bigmodel.cn" },
+    { "name": "智谱 AI 开放平台社区", "url": "https://zhipuaishengchan.datasink.sensorsdata.cn" },
+    { "name": "GLM Coding Plan 文档", "url": "https://docs.bigmodel.cn/cn/glm-guide/overview" }
+  ]
+}
