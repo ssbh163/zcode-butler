@@ -66,6 +66,7 @@ assets/news.json ──> news.mjs
 - 数据:纯渲染壳,`Start-Process node status.mjs --json`(异步+临时文件+UTF8 读取+完整性校验),110 分钟定时 / wake 文件 / 手动刷新
 - 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
 - 交互:悬停气泡 / 齿轮折叠卡(归档写 intent+`/butler:doc` 进剪贴板 / Key 增删写 butler.json / 刷新频率+停靠+位置重置)/ 资讯面板全读 / 双击收起把手 / 右键菜单 / Ctrl+Shift+G / 拖动记物理偏移
+- 配色:深色底为环境灰 #161616(不透明,与桌面/ZCode 深色表面实测同色,胶囊无黑块感);气泡 #1A1A1A / 面板 #1C1C1C 略亮一层保可读性
 - 生命周期:互斥量 `Global\ZCode-Butler-Widget` + EventWaitHandle + wake 文件双通道;脚本被删自动退出;位置/环数/把手态记 `butler-widget.pos.json`
 - 已知限制:设置项改后未持久化;图标为 emoji 字符(待换 Path 矢量);**交互细项待真机人工验收**
 
@@ -100,6 +101,14 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 ## 二、变更历史
 
 (按时间倒序,每条含:背景 / 改动 / 影响范围 / 回滚方案)
+
+### [v0.1.1] 2026-09-11 悬浮窗深色底改为环境灰
+
+- **背景**:用户反馈深色模式下悬浮窗底色(#12151B 偏蓝黑)与桌面灰色不协调,黑块感明显。
+- **改动**:butler-widget.ps1 五处深色面统一换灰——胶囊 #FF161616(不透明,四周实测采样值)、把手 #1D1D1D、气泡 #1A1A1A、资讯面板/齿轮卡 #1C1C1C(气泡面板略亮一层保层次)。
+- **影响范围**:仅 widget 颜色常量;无协议/逻辑改动。
+- **验证**:真机逐像素采样——胶囊空白区三点均 #161616,与四周(桌面/ZCode 表面)完全一致;略亮的值均为环/图标/小点等控件本体。
+- **回滚方案**:revert 本 commit 即回到原蓝黑底。
 
 ### [v0.1.0-M2] 2026-09-11 M2 悬浮窗上线
 

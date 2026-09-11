@@ -101,7 +101,7 @@ $WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
 $C_GREEN = '#7EF0B2'; $C_YELLOW = '#FFC861'; $C_RED = '#FF5F5F'
 $C_TRACK = '#26FFFFFF'; $C_ERR = '#8AFFFFFF'
 $C_TEXT = '#F2FFFFFF'; $C_SUB = '#99FFFFFF'; $C_FAINT = '#55FFFFFF'
-$C_BG = '#EE12151B'; $C_ACCENT = '#5AC8FA'
+$C_BG = '#F0161616'; $C_ACCENT = '#5AC8FA'
 $MONO = 'Consolas, 9.5'
 function Brush($hex) {
   if (-not $script:bc) { $script:bc = New-Object System.Windows.Media.BrushConverter }
@@ -184,7 +184,7 @@ $xamlText = @'
   </Window.ContextMenu>
   <StackPanel Margin="20,8,4,8" HorizontalAlignment="Right">
     <!-- 平时态胶囊 -->
-    <Border x:Name="Root" Width="64" CornerRadius="20" Background="#EE12151B"
+    <Border x:Name="Root" Width="64" CornerRadius="20" Background="#FF161616"
             BorderBrush="#1FFFFFFF" BorderThickness="1" Padding="6,8,6,8" Cursor="Hand">
       <StackPanel x:Name="NormalPanel">
         <StackPanel x:Name="Ring5h" Tag="5h" />
@@ -197,7 +197,7 @@ $xamlText = @'
       </StackPanel>
     </Border>
     <!-- 把手态(收起后):细竖条 -->
-    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="5" Background="#CC1B1F27"
+    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="5" Background="#CC1D1D1D"
             BorderBrush="#1FFFFFFF" BorderThickness="1" Visibility="Collapsed" Cursor="Hand">
       <TextBlock Text="⟨" FontSize="11" Foreground="#99FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
@@ -365,7 +365,7 @@ $bellBadge.Child = $bellBadgeText
 $bubble = New-Object System.Windows.Controls.Primitives.Popup
 $bubble.Placement = 'Left'; $bubble.StaysOpen = $true; $bubble.AllowsTransparency = $true
 $bubbleRoot = New-Object System.Windows.Controls.Border
-$bubbleRoot.Background = Brush '#F212151B'; $bubbleRoot.CornerRadius = '10'
+$bubbleRoot.Background = Brush '#F21A1A1A'; $bubbleRoot.CornerRadius = '10'
 $bubbleRoot.BorderBrush = Brush '#22FFFFFF'; $bubbleRoot.BorderThickness = '1'
 $bubbleRoot.Padding = '12,10,14,10'; $bubbleRoot.MaxWidth = 260
 $bubbleStack = New-Object System.Windows.Controls.StackPanel
@@ -373,7 +373,7 @@ $bubbleRoot.Child = $bubbleStack
 $bubbleGrid = New-Object System.Windows.Controls.Grid
 [void]$bubbleGrid.Children.Add($bubbleRoot)
 $bubbleArrow = New-Object System.Windows.Controls.TextBlock
-$bubbleArrow.Text = '▸'; $bubbleArrow.FontSize = 12; $bubbleArrow.Foreground = Brush '#F212151B'
+$bubbleArrow.Text = '▸'; $bubbleArrow.FontSize = 12; $bubbleArrow.Foreground = Brush '#F21A1A1A'
 $bubbleArrow.VerticalAlignment = 'Center'; $bubbleArrow.HorizontalAlignment = 'Right'
 $bubbleArrow.Margin = '0,0,-2,0'
 [void]$bubbleGrid.Children.Add($bubbleArrow)
@@ -475,7 +475,7 @@ $newsPanel = New-Object System.Windows.Controls.Primitives.Popup
 $newsPanel.Placement = 'Left'; $newsPanel.VerticalOffset = -180
 $newsPanel.StaysOpen = $false; $newsPanel.AllowsTransparency = $true
 $newsRoot = New-Object System.Windows.Controls.Border
-$newsRoot.Background = Brush '#F5141720'; $newsRoot.CornerRadius = '12'
+$newsRoot.Background = Brush '#F51C1C1C'; $newsRoot.CornerRadius = '12'
 $newsRoot.BorderBrush = Brush '#22FFFFFF'; $newsRoot.BorderThickness = '1'
 $newsRoot.Width = 300; $newsRoot.Padding = '14,12,14,12'
 $newsStack = New-Object System.Windows.Controls.StackPanel
@@ -564,7 +564,7 @@ $gearPanel = New-Object System.Windows.Controls.Primitives.Popup
 $gearPanel.Placement = 'Left'; $gearPanel.VerticalOffset = -260
 $gearPanel.StaysOpen = $false; $gearPanel.AllowsTransparency = $true
 $gearRoot = New-Object System.Windows.Controls.Border
-$gearRoot.Background = Brush '#F5141720'; $gearRoot.CornerRadius = '12'
+$gearRoot.Background = Brush '#F51C1C1C'; $gearRoot.CornerRadius = '12'
 $gearRoot.BorderBrush = Brush '#22FFFFFF'; $gearRoot.BorderThickness = '1'
 $gearRoot.Width = 320; $gearRoot.Padding = '14,12,14,12'
 $gearStack = New-Object System.Windows.Controls.StackPanel
