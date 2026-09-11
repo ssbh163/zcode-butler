@@ -8,13 +8,49 @@
 
 ## 踩坑提醒(累积)
 
-- **块注释里的 `*/` 字样会提前闭合注释**:`凭据字段兼容 options.*/顶层` 这种写法把 `lib/api.mjs` 的 JSDoc 注释截断,`node --check` 才暴露。注释里描述通配路径时避开 `*/` 相邻组合。
-- **`Promise.resolve().then(() => { const n = asyncFn(); ... })` 忘 await**:`n` 是 Promise,取属性全是 undefined,且不报错——静默产出空对象。回调内调 async 函数,一律改写 `async () => { const n = await ... }`。
-- **`node --test <目录>` 在 Windows(Node 22.12 实测)不工作**:目录参数被当模块 require 报 MODULE_NOT_FOUND,须用递归 glob 形式 `node --test "plugins/zcode-butler/scripts/**/*.test.mjs"`(AGENTS.md 已修正)。
+> M2 的 9 条 PS 5.1 / Win32 坑详见下方 M2 日志(编号 1-9);下面只留普适速查:
+- **PowerShell 函数参数禁用自动变量名**(pid/host/input/error…),撞上 `$PID` 是静默不执行,最难查
+- **vbs 必须 ASCII 无 BOM**;ps1 必须 CRLF+BOM;node 输出用 `Get-Content -Encoding UTF8` 读
+- **P/Invoke 回调**:scriptblock 传参 = 临时委托会被 GC;回调里 `$script:` 失效 → 用 .NET 静态类字段
+- **IntPtr 比较用 `([int64]$h) -eq 0`**,装箱 `-eq [IntPtr]::Zero` 不可靠
+- **块注释里的 `*/` 字样会提前闭合注释**(`options.*/顶层` 截断 JSDoc);`Promise.resolve().then` 回调里调 async 函数必须 await
+- **`node --test <目录>` 在 Windows(Node 22.12)不工作**,须递归 glob;杀诊断目标的进程查询要拆串防自匹配
 
 ---
 
 ## 开发日志(倒序)
+
+### 2026-09-11 M2 悬浮窗交付(butler-widget.ps1 1206 行 + 启动分发 + hooks 接入)
+
+**范围**:`scripts/widget/` 三件(butler-widget.ps1 / widget-launch.mjs / widget-launch.vbs);hooks.json SessionStart 首位挂 widget-launch。UI 全量:三大环(进度弧+图标+百分比)、Key 渐进环(1→3,+N 徽标)、铃铛(未读红点)、悬停气泡、齿轮折叠配置卡(归档写 intent+剪贴板兜底 / Key 增删写 butler.json / 刷新频率+停靠+位置重置)、资讯面板(全读)、把手(双击收起)、右键菜单、Ctrl+Shift+G、单实例+唤醒双通道、110min 定时、WinEvent 跟随(LOCATIONCHANGE + MINIMIZESTART/END,33ms 节流,ZCode 退出退主屏右缘+2.5s 重扫)。
+
+**真机验证证据**(本机 Windows,主屏 3840×2160@175% + 左副屏混合 DPI):
+- 渲染:悬浮窗贴 ZCode 主窗右缘(物理 3180..3334),三环数字与 `status.mjs --json` 同刻一致(29/6/11/52),钥匙环 +2 徽标、铃铛红点、齿轮小点齐全(视觉模型读图确认)
+- 跟随:ZCode 最小化 → 悬浮窗隐藏 ✓;还原 → 恢复显示且位置正确 ✓;WinEvent 双钩子句柄非零
+- 数据:node 异步拉取不冻结 UI;单实例互斥 + wake 文件唤醒链路通
+
+**需真机人工验证清单**(AGENTS 红线:交互/焦点类不许默认能工作):
+- [ ] 悬停气泡四类(三环/Key/铃铛)内容与关闭手感;齿轮卡三组折叠互斥;资讯面板全读
+- [ ] 渐进环点击 +1;双击收起把手/单击展开;右键菜单;Ctrl+Shift+G;拖动后垂直位置记忆
+- [ ] ZCode 拖动时的实时跟随观感(33ms 节流应无拖影);跨屏拖 ZCode 时的重定位
+- [ ] 插件市场安装后 SessionStart hook 拉起链路(本轮为手动 launch 验证;host.json 的 ppid 在真实 hook 下才是 ZCode)
+- [ ] 与旧插件悬浮窗共存提示(菜单项出现逻辑)
+
+**已知限制(Backlog)**:设置面板"刷新频率/停靠位置"有 UI 未写回 butler.json(改后下次启动仍用旧值);开机自启未做;图标用 emoji 字符(HTML 原型的线性 SVG→Path 矢量后续替换)。
+
+**踩坑记录(本日 9 个,全部真机实证,按严重度)**:
+1. **`$pid` 函数参数撞 PS 只读自动变量 `$PID`**:参数绑定静默失败、函数体不执行——不抛错、无任何痕迹,Find-ZcodeWindow 因此"永远找不到 ZCode"。PS 函数参数避开 pid/host/input/error 等自动变量名。
+2. **vbs + UTF-8 BOM 静默失败**:wscript 不认 BOM,vbs 带中文注释/BOM 直接起不来(实例从未启动,窗口全靠手动 Start-Process 误判为正常)。vbs 必须 ASCII 无 BOM;.gitattributes/.editorconfig/AGENTS 已修正(原规则"vbs 同 ps1 带 BOM"是错的)。
+3. **scriptblock→delegate 后 `$script:` 作用域丢失**:EnumWindows 回调里的赋值全部无效(空结果)。跨回调状态必须走 .NET 静态类字段(`ButlerState::FollowDirty`)。
+4. **WinEvent 委托被 GC**:scriptblock 直接传 SetWinEventHook 生成临时委托,GC 后回调死(钩子句柄有效但永不触发)。必须 `[ButlerNative.Win+WinEventProc]{...}` 强转并长期持引用。
+5. **`[IntPtr]::Zero -eq [IntPtr]::Zero` 为 false**:PS 5.1 IntPtr 装箱比较失效,全链保护形同虚设(拿到全 0 rect 算出屏外坐标)。统一 `([int64]$h) -eq 0` 数值比较。
+6. **Get-Content 默认 ANSI(GBK)读 UTF-8 JSON**:node 输出第一个中文字符处必炸("应为:或}")。读 node 子进程输出必须 `-Encoding UTF8`。
+7. **node 退出与重定向文件刷盘竞态**:HasExited 时文件可能截断。退出后等一拍再读 + 校验以 `}` 结尾。
+8. **`$x = if(...){}else{}` 赋值 PS 5.1 不支持**(PS7 语法);`$bc -or (New-Object ...)` 返回布尔不返回对象(JS 短路初始化的坑)。共修 4 处。
+9. **混合 DPI 多屏下 WPF 纯 DIP 坐标数学不可靠**(主屏 175% + 副屏):powershell.exe 进程实为 SystemAware,`SetProcessDpiAwarenessContext(PMv2)` 无法升级;跟随定位一律走物理像素域 SetWindowPos + GetWindowRect,窗口查找用 `Get-Process.MainWindowHandle`(顺带绕开设置弹窗)。
+
+**诊断方法沉淀**:给静默吞错(SilentlyContinue)的脚本在关键节点打 Add-Content 日志(TEMP 下),先定位"哪一段没执行"再谈为什么;排查时 kill 进程的查询字符串要拆串(`'butler-w'+'idget'`)防止自匹配把诊断进程杀掉。
+**耗时**:悬浮窗本体约 3.5 小时(其中 2 小时在坑里),真机联调 1 小时。**commit**:见 git log "M2 悬浮窗"。
 
 ### 2026-09-11 M3 Chat2Doc 交付(extract/format/merge + 模板 + doc-intent + 端到端验证)
 

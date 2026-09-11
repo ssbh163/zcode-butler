@@ -6,14 +6,15 @@ end_of_line = lf
 insert_final_newline = true
 trim_trailing_whitespace = true
 
-# Windows 专属脚本:CRLF + UTF-8 带 BOM(否则 PowerShell 5.1 中文乱码)
+# Windows 专属脚本:CRLF;ps1 带 BOM(否则 PowerShell 5.1 中文乱码),
+# vbs 无 BOM(wscript 不认 BOM,内容保持纯 ASCII)
 [*.ps1]
 end_of_line = crlf
 charset = utf-8-bom
 
 [*.vbs]
 end_of_line = crlf
-charset = utf-8-bom
+charset = us-ascii
 
 # Markdown 保留行尾空格(硬换行语法)
 [*.md]

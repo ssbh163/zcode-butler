@@ -12,6 +12,7 @@
 *.html  text eol=lf
 
 # Windows 专属脚本:检出永远 CRLF(PowerShell 5.1 舒适)
+# ps1 带 UTF-8 BOM(防中文乱码);vbs 必须 ASCII 无 BOM(wscript 不认 BOM,带 BOM 静默失败,实测事故)
 *.ps1   text eol=crlf
 *.vbs   text eol=crlf
 

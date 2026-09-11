@@ -2,7 +2,7 @@
 
 > **活文档:模块现状的唯一真相源(SSOT)。** 开发完成后写初版;每次调整直接更新本文件(更新现状解读 + 追加变更历史),不新建调整文档。调整前先 commit。
 >
-> 当前状态:**M1 数据内核 + M3 Chat2Doc + M4 收尾已交付**;M2 悬浮窗未开始(计划见 PROJECT.md §11,建议独立会话 + 用户在场联调 UI)。
+> 当前状态:**M1-M4 全部交付**(悬浮窗交互细项与插件安装链路待用户真机验收,清单见 DEV RECORD M2)。
 
 ---
 
@@ -22,10 +22,10 @@
 | `scripts/chat2doc/` | 会话归档流水线:extract.py(rollout JSONL→turns.json,full/delta/tail 缝合+toolCalls 回注)/ format_batch.py(分批+Markdown 防护+ZCode 工具映射)/ merge_batch.py(占位符替换,蓝图 100% 复用)+ 23 个 unittest | ✅ M3 |
 | `scripts/doc-intent.mjs` | 归档意图检测 hook:UserPromptSubmit 主链路(注入任务+消费 intent)/ SessionStart --startup 兜底;10 分钟过期自清 | ✅ M3 |
 | `assets/templates/素材文档.md` | 素材文档格式与摘要规则(外置可编辑,用户改模板即改产出) | ✅ M3 |
-| `scripts/widget/` | WPF 悬浮窗 + 启动分发 | ⏳ M2 |
+| `scripts/widget/` | WPF 悬浮窗(butler-widget.ps1:三环/渐进 Key 环/铃铛/气泡/齿轮折叠卡/资讯面板/把手/WinEvent 跟随)+ widget-launch.mjs(touch wake + host.json ppid + vbs 冷启动)+ widget-launch.vbs(ASCII 免黑窗) | ✅ M2 |
 | `commands/` | usage / watch / doc / news 四命令 | ✅ M1+M3 |
 | `skills/butler/SKILL.md` | 自然语言主入口(四能力) | ✅ M1+M3 |
-| `hooks/hooks.json` | SessionStart → status.mjs --hook + doc-intent --startup;UserPromptSubmit → doc-intent | ✅ M1+M3(悬浮窗拉起待 M2) |
+| `hooks/hooks.json` | SessionStart → widget-launch + status.mjs --hook + doc-intent --startup;UserPromptSubmit → doc-intent | ✅ 全量 |
 
 ### 2. 核心架构
 
@@ -61,6 +61,14 @@ assets/news.json ──> news.mjs
 2. `news.items` 为全量条目(最新在前),每条带 `read` 布尔;未读数 `news.unread`
 3. 顶层带 `protocolVersion: 1`;模块失败 → 对应段 null/[] 且 `errors[]` 记 `{module, message}`
 
+### 6. 悬浮窗(as-built,§4 的实现现状)
+
+- 数据:纯渲染壳,`Start-Process node status.mjs --json`(异步+临时文件+UTF8 读取+完整性校验),110 分钟定时 / wake 文件 / 手动刷新
+- 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
+- 交互:悬停气泡 / 齿轮折叠卡(归档写 intent+`/butler:doc` 进剪贴板 / Key 增删写 butler.json / 刷新频率+停靠+位置重置)/ 资讯面板全读 / 双击收起把手 / 右键菜单 / Ctrl+Shift+G / 拖动记物理偏移
+- 生命周期:互斥量 `Global\ZCode-Butler-Widget` + EventWaitHandle + wake 文件双通道;脚本被删自动退出;位置/环数/把手态记 `butler-widget.pos.json`
+- 已知限制:设置项改后未持久化;图标为 emoji 字符(待换 Path 矢量);**交互细项待真机人工验收**
+
 ### 7. Chat2Doc 流水线(as-built)
 
 rollout 格式(ZCode 3.11.2 实测,**勘误 PROJECT.md §6.3**):messages 在 `request` 顶层(非
@@ -77,7 +85,7 @@ py chat2doc/format_batch.py <work>/turns.json <work>      # ~150 parts/批不切
 py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 ```
 
-### 6. 用户文件清单
+### 8. 用户文件清单
 
 | 文件 | 写方 | 说明 |
 |---|---|---|
@@ -92,6 +100,15 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 ## 二、变更历史
 
 (按时间倒序,每条含:背景 / 改动 / 影响范围 / 回滚方案)
+
+### [v0.1.0-M2] 2026-09-11 M2 悬浮窗上线
+
+- **背景**:PROJECT.md §11 里程碑 M2:四端中的桌面端(此前仅命令/对话/CLI 三端)。
+- **改动**:新增 scripts/widget/ 三件(1206 行 WPF 主窗 + 启动分发 + ASCII vbs);hooks.json SessionStart 首位挂 widget-launch;修正 .gitattributes/.editorconfig/AGENTS 的 vbs 编码规则(ASCII 无 BOM,原"同 ps1 带 BOM"规则错误)。
+- **影响范围**:纯新增 + 三处规则文件修正。
+- **验证**:真机(混合 DPI 双屏)确认——渲染(三环数字与 CLI 同刻一致 29/6/11/52)、贴 ZCode 主窗右缘、WinEvent 最小化隐藏/还原恢复、单实例+唤醒;交互细项列 DEV RECORD 待人工验收清单。
+- **踩坑**:PS 5.1 九连坑($PID 参数/vbs BOM/delegate 作用域/委托 GC/IntPtr 比较/GBK 读 JSON/刷盘竞态/if 表达式/混合 DPI 坐标),全部记入 DEV RECORD M2。
+- **回滚方案**:`git revert` M2 commit + hooks.json 回退(悬浮窗是独立进程,revert 后手动退出即可)。
 
 ### [v0.1.0-M3] 2026-09-11 M3 Chat2Doc 流水线上线
 
