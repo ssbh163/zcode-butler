@@ -1,0 +1,11 @@
+# 个人笔记,不入库
+会话历史.md
+速记备忘录.md
+
+# 头脑风暴工作目录(视觉伴侣运行时产物;定稿原型已拷贝到 docs/ui/)
+.superpowers/
+
+# 系统杂项
+Thumbs.db
+.DS_Store
+desktop.ini

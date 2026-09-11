@@ -1,0 +1,13 @@
+{
+  "name": "zcode-plugins-personal",
+  "description": "zcode-butler(码管家):账号用量 + 多 Key 监控 + 会话归档(Chat2Doc)+ 活动资讯四合一 ZCode 插件市场。",
+  "owner": { "name": "zcode-butler contributors" },
+  "plugins": [
+    {
+      "name": "zcode-butler",
+      "source": "./plugins/zcode-butler",
+      "category": "development",
+      "description": "智谱 GLM Coding Plan 管家:账号三环用量(5h池/每周/MCP)、多 Key 自然月加权监控、AI 会话归档成开发文档(Chat2Doc)、活动资讯,配 Nothing 风格贴边悬浮窗。"
+    }
+  ]
+}

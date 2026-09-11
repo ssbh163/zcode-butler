@@ -1,0 +1,24 @@
+# 跨平台基线:文本入库一律 LF,覆盖未来新增的文件类型
+*       text=auto
+
+# 解释执行类文本:入库 LF,检出也强制 LF
+*.sh    text eol=lf
+*.swift text eol=lf
+*.mjs   text eol=lf
+*.js    text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
+*.html  text eol=lf
+
+# Windows 专属脚本:检出永远 CRLF(PowerShell 5.1 舒适)
+*.ps1   text eol=crlf
+*.vbs   text eol=crlf
+
+# 二进制,禁止任何转换
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.zip   binary
