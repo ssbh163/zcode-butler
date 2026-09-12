@@ -9,7 +9,7 @@
 ## 踩坑提醒(累积)
 
 > M2 的 9 条 PS 5.1 / Win32 坑详见下方 M2 日志(编号 1-9);下面只留普适速查:
-- **PowerShell 函数参数禁用自动变量名**(pid/host/input/error…),撞上 `$PID` 是静默不执行,最难查
+- **PowerShell 函数参数禁用自动变量名**(pid/host/input/error…),撞上 `$PID` 是静默不执行,最难查;**事件处理器 `param($args)` 是更阴的变体**(2026-09-13 实测):绑不上但不报错,`IsSuccess` 恒空 → 走向整个反转(误判初始化失败)
 - **vbs 必须 ASCII 无 BOM**;ps1 必须 CRLF+BOM;node 输出用 `Get-Content -Encoding UTF8` 读
 - **P/Invoke 回调**:scriptblock 传参 = 临时委托会被 GC;回调里 `$script:` 失效 → 用 .NET 静态类字段
 - **IntPtr 比较用 `([int64]$h) -eq 0`**,装箱 `-eq [IntPtr]::Zero` 不可靠
@@ -19,6 +19,24 @@
 ---
 
 ## 开发日志(倒序)
+
+### 2026-09-13 [实现] 悬浮窗 WebView2 方案落地(用户定稿 HTML 直载,c5a49ea)
+
+**背景**:用户交付定稿 UI(430×2025 四环版 `ai-sidebar-widget.html`)并裁决按技术文档建议改 WebView2,放弃原生 WPF 复刻。此前半途尝试记录的四坑(LoadFrom 原生 DLL / UI 线程 GetResult / WinForms 属性名 / py heredoc replace)全部规避:仅 LoadFrom 两个托管 DLL、`$wv2.Source` 隐式初始化、WPF `Width/Height`、一律 Edit 工具改文件。
+
+**过程**:
+1. HTML 副本四处最小改动:去壁纸(月牙空隙透桌面)、舞台贴右 + fit 按窗高等比缩放、数据桥(butlerSetRing/butlerApply,协议=status.mjs --json)、拖动桥(pointerdown→postMessage,fab 区除外)。浏览器 220×810 窄窗先验贴右+透明,通过。
+2. 壳重写保留 M2 全部非渲染链路(互斥量/wake/热键/WinEvent 跟随/node 数据链/自退出),新踩三坑:
+   - **`param($sender, $args)` 撞自动变量**:$args 绑不上(仍是自动数组)→ `IsSuccess` 恒空 → 误判"初始化失败" → 隐藏模态 MessageBox 永久阻塞 + 占死互斥量,日志仅剩空消息与半截 stack。写最小复现(同透明窗同属性)INIT OK 才剥离开来,改名 `$e` 即愈。
+   - **默认用户数据目录随宿主 exe 落 System32**(不可写)→ 必须 `CoreWebView2CreationProperties.UserDataFolder` 显式指定(现 `~/.zcode/butler-widget-wv2`)。
+   - **.NET Framework 不探测 LoadFrom 程序集目录** → 原生 `WebView2Loader.dll` 要靠 `$env:PATH` 前置 vendored 目录解析(诊断手法:`GetAvailableBrowserVersionString()` 能跑通=loader+Runtime 都通)。
+   - 另:bash↔PowerShell 内联命令的双引号嵌套转义会把 kill/start 静默弄坏,改用 `-File` 控制脚本(临时 butler-ctl.ps1)后消停。
+3. 验证:窗口 145×1365 物理像素贴 ZCode 右缘;四环注入真实数据(100/55/14/8,与账号实况一致);月牙空隙透明;1:1 物理截图 + 视觉模型判读。**教训:145px 宽小图上视觉模型会把文字 glyph 读成图标、并幻觉出页面里不存在的元素(grep HTML 无铃铛/+1)——只能采信结构化结论(面板形态/环数/百分比数字)。**
+4. 回归:node --test 45 通过、py unittest 23 通过;ps1 CRLF+BOM 字节核验;[scriptblock]::Create 语法检查过。
+
+**遗留(待真机人工验收)**:拖动/热键 Ctrl+Shift+G/跟随移动/最小化恢复/fab 悬停变形;原生版设置卡(归档入口/Key 增删/设置)与资讯面板未在 HTML 内重建,后续迭代。
+**耗时**:约 3.5h(HTML 改造+浏览器验证 1h / 壳重写 1h / $args 事故定位 1h / 回归+提交+文档 0.5h)。
+**commit**:c5a49ea。
 
 ### 2026-09-12 [回退] 悬浮窗退到 M2 初版 90bdf8c(用户裁决)
 

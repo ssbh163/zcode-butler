@@ -63,12 +63,12 @@ assets/news.json ──> news.mjs
 
 ### 6. 悬浮窗(as-built,§4 的实现现状)
 
-- 数据:纯渲染壳,`Start-Process node status.mjs --json`(异步+临时文件+UTF8 读取+完整性校验),110 分钟定时 / wake 文件 / 手动刷新
+- 架构(2026-09-13 v0.2.0 起,WebView2 方案):**WPF 窗口 + WebView2 控件做宿主壳,`butler-widget.html` 做全部渲染**。壳只管窗口/取数/桥接:无边框透明置顶窗(83×780 DIP,PerMonitorV2 DPI)、`node status.mjs --json`(异步+临时文件+UTF8+完整性校验,110 分钟定时)→ `CoreWebView2.PostWebMessageAsJson` 投给页面 `butlerApply`(收到页面 ready 消息后才投)。vendored DLL 在 `scripts/widget/webview2/`(NuGet 1.0.2739.15,x64,仅 LoadFrom 两个托管程序集);原生 `WebView2Loader.dll` 经 PATH 前置解析;用户数据目录显式指 `~/.zcode/butler-widget-wv2`(默认目录随宿主 exe 落 System32,不可写必失败)
+- 渲染层:用户定稿 HTML 副本 + 四处最小改动(去壁纸 / 舞台贴右 + fit 按窗高等比缩放 / 数据桥 butlerSetRing·butlerApply / 拖动桥)。四环 = 5h 池 / 每周 / MCP 月 / 用量最高 Key,环心文字 glyph(5h/7d/mcp/key)+ 下方百分比;高峰橙色光晕由页面按本机时间判(工作日 14–18 点);月牙空隙透明(`DefaultBackgroundColor=Transparent` 透出桌面),面板本体纯黑
 - 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
-- 交互:悬停气泡 / 齿轮折叠卡(归档写 intent+`/butler:doc` 进剪贴板 / Key 增删写 butler.json / 刷新频率+停靠+位置重置)/ 资讯面板全读 / 双击收起把手 / 右键菜单 / Ctrl+Shift+G / 拖动记物理偏移
-- 形态(用户参考图驱动,2026-09-11 v3,Nothing 风格):**纯黑 D 形胶囊贴 ZCode 右缘**——右缘直边贴齐(x = zRight − wphys)、左侧半圆端(CornerRadius 28,0,0,28),底色 #F20A0A0A;环为细线(大环 42px 线宽 4 / Key 环 30px 线宽 2.8)、平头端帽、底轨实色 #2E2E2E;色阶四档 <50 绿 #4ADE80 / 50-79 黄 #F2E33A / 80-89 橙 #E8722A / ≥90 红;环心与按钮图标统一 **Segoe MDL2 Assets 单色线性字形**(闪电 E945 / 日历 E787 / 电源 E7E8 / 锁 E72E / 铃铛 E7ED / 齿轮 E713 / 错误警告 E7BA),错误态图标切换由 Ctrl 表 Glyph 字段恢复;百分比环下白色 11px Consolas;把手态细条右对齐 #E60A0A0A;齿轮常显 24px 灰底圆钮(悬停放大 28);气泡/面板 #F50A0A0A + #22FFFFFF 细描边
-- 生命周期:互斥量 `Global\ZCode-Butler-Widget` + EventWaitHandle + wake 文件双通道;脚本被删自动退出;位置/环数/把手态记 `butler-widget.pos.json`
-- 已知限制:设置项改后未持久化;MDL2 字形在 Win10 以下不存在(本插件限 Win10+ 无碍);**交互细项待真机人工验收**
+- 交互:面板拖动 = 页面 pointerdown → 宿主 DragMove → 折算 offsetY 记 `butler-widget.pos.json`(fab 区除外);Ctrl+Shift+G 显隐;wake 双通道唤回;fab 齿轮为页面内悬停变形 + 点击反馈,**暂无宿主动作**(设置卡/Key 管理/资讯面板待 HTML 内重建,见已知限制)
+- 生命周期:互斥量 `Global\ZCode-Butler-Widget` + EventWaitHandle + wake 文件双通道;脚本被删自动退出;初始化失败(Runtime 缺失)以 mshta 分离进程弹非阻塞提示后退出
+- 已知限制:原生版齿轮折叠卡(归档入口/Key 增删/设置)与资讯面板未在 HTML 内重建;高峰判定用页面本机时间(status.mjs 口径是服务端北京时间,两处口径不一致但无实害);**拖动/热键/跟随移动/最小化恢复待真机人工验收**;运行需系统 WebView2 Runtime(Win10/11 一般自带,缺则弹安装指引)
 
 ### 7. Chat2Doc 流水线(as-built)
 
@@ -101,6 +101,13 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 ## 二、变更历史
 
 (按时间倒序,每条含:背景 / 改动 / 影响范围 / 回滚方案)
+
+### [v0.2.0] 2026-09-13 悬浮窗渲染层换 WebView2(用户定稿 HTML 直载)
+
+- **背景**:原生 WPF 手工复刻用户 HTML 原型两轮被否(视觉翻译失真),用户裁决按技术文档建议改 WebView2 直载,并交付定稿 UI(430×2025 四环版)。
+- **改动**:新增 `butler-widget.html`(定稿副本 + 去壁纸/贴右缩放/数据桥/拖动桥四处最小改动)与 vendored `webview2/` DLL;`butler-widget.ps1` 重写为宿主壳(PostWebMessageAsJson 数据桥、透明月牙、显式用户数据目录、PATH 解析原生 loader、PerMonitorV2 DPI、mshta 非阻塞错误提示);修复事件处理器 `param($args)` 撞自动变量致误判初始化失败的事故。
+- **影响范围**:仅悬浮窗渲染层与壳;`status.mjs --json` 协议字段零改动(四端无需同步);Chat2Doc/命令/hooks 不受影响;悬浮窗新增依赖"系统 WebView2 Runtime + vendored .NET DLL"(仍零 npm/pip)。
+- **回滚方案**:`git checkout dbb0aa3 -- plugins/zcode-butler/scripts/widget/butler-widget.ps1` 并删除 `butler-widget.html`、`webview2/`,重启即回原生 D 形胶囊(数据链协议同源)。
 
 ### [v0.1.2] 2026-09-11 悬浮窗改 Nothing 风格 D 形胶囊(用户参考图)
 
