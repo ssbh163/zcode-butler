@@ -5,8 +5,10 @@
 # 数据链:node status.mjs --json → CoreWebView2.PostWebMessageAsJson → 页面 butlerApply
 # 壳职责(文档 §7):无边框透明置顶窗口 / WinEvent 跟随 ZCode 右缘 / 热键 Ctrl+Shift+G /
 #   单实例互斥 + wake 双通道 / node 拉数 / 自存活;一切绘图归 HTML
-# 依赖:vendored webview2/(仅 LoadFrom 两个托管 DLL;原生 loader 同目录自动探测)
-#   + 系统 WebView2 Runtime(Win10/11 常带;缺→提示安装并退出)
+# 依赖:vendored webview2/(仅 LoadFrom 两个托管 DLL;原生 loader 靠 PATH 前置解析)
+#   + 系统 WebView2 Runtime(Win10/11 常带;缺→mshta 提示安装并退出)
+# 窗口形状:SetWindowRgn(面板轮廓 ∪ fab 圆)——AllowsTransparency 分层窗口对 HwndHost
+#   不生效(月牙刷白+命中异常,实测),区域外 OS 直接不渲染,天然透出桌面且可点击穿透
 # 教训规避(DEV RECORD 2026-09-12):原生 DLL 禁喂 LoadFrom(BadImageFormat 终止);
 #   UI 线程禁 GetAwaiter().GetResult()(Dispatcher 死锁)→ 一律事件回调 + $wv2.Source 隐式初始化
 # =====================================================================
@@ -67,9 +69,40 @@ public delegate void WinEventProc(IntPtr hHook, uint evt, IntPtr hwnd, int idObj
 [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hHook);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
 [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
+[DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
 '@
 # 跨回调状态:$script: 在 WinEvent delegate 里会丢(实测),置脏走 .NET 静态字段
 Add-Type -TypeDefinition 'public static class ButlerState { public static volatile int FollowDirty; }'
+# GDI 区域:窗口形状 = 面板轮廓多边形 ∪ fab 圆(替代不生效的分层窗口透明)
+# 注意:裸 -TypeDefinition 不自动带 using(MemberDefinition 才带),Interop 特性必须自己引
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ButlerGdi {
+  [StructLayout(LayoutKind.Sequential)] public struct PT { public int X, Y; }
+  [DllImport("gdi32.dll")] public static extern IntPtr CreatePolygonRgn(PT[] pts, int n, int mode);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreateEllipticRgn(int x1, int y1, int x2, int y2);
+  [DllImport("gdi32.dll")] public static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
+  [DllImport("gdi32.dll")] public static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
+  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr o);
+  [DllImport("user32.dll")] public static extern int SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
+}
+'@
+WLog ('gdi type loaded=' + ([bool]([System.Management.Automation.PSTypeName]'ButlerGdi').Type))
+# 面板轮廓(舞台坐标):运行时从 HTML 提取 outline 数组——单一正本,不在壳里复制形状数据
+$script:outlinePts = @()
+try {
+  $htmlRaw = Get-Content $htmlFile -Raw -Encoding UTF8
+  # 注意锚到 "];"(数组真结束):内层成对坐标自带 "]" ,非贪婪若只到 "]" 会在第一对就截断
+  $m = [regex]::Match($htmlRaw, 'var\s+outline\s*=\s*\[(.*?)\];', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+  if ($m.Success) {
+    $nums = [regex]::Matches($m.Groups[1].Value, '\d+(?:\.\d+)?')
+    for ($i = 0; $i -lt $nums.Count - 1; $i += 2) {
+      $script:outlinePts += , @([double]$nums[$i].Value, [double]$nums[$i + 1].Value)
+    }
+  }
+} catch { }
+WLog ('outline pts=' + $script:outlinePts.Count)
 # PerMonitorV2(句柄 -4):跟随定位走物理像素,WPF 窗口必须同样按物理 DPI 对齐(M2 已验证)
 [void][ButlerNative.Win]::SetProcessDpiAwarenessContext([IntPtr](-4))
 
@@ -77,7 +110,7 @@ $EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANG
 $WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
 
 # ---- 窗口尺寸(HTML 舞台 430×2025,面板带宽 219.2→430 ≈ 211;悬浮窗按高定 k) ----
-$script:stageH = 780.0                       # DIP;物理(175%)≈1365,占主屏高 63%
+$script:stageH = 600.0                       # DIP;物理(175%)≈1050,占主屏高 49%(2026-09-13 用户要求改小)
 $script:winH = [int]$script:stageH
 $script:winW = [int][Math]::Ceiling(211.0 * ($script:stageH / 2025.0) + 1.5)   # ≈ 83
 
@@ -85,8 +118,10 @@ $win = New-Object System.Windows.Window
 $win.Title = '码管家'
 $win.Topmost = $true
 $win.WindowStyle = [System.Windows.WindowStyle]::None
-$win.AllowsTransparency = $true
-$win.Background = [System.Windows.Media.Brushes]::Transparent
+# 禁用 AllowsTransparency:WPF 分层窗口对 WebView2(HwndHost 子窗口)不参与透明合成——
+# 月牙空隙刷成白底、鼠标命中异常(2026-09-13 实测);改普通窗口 + SetWindowRgn 裁出面板形状
+$win.AllowsTransparency = $false
+$win.Background = [System.Windows.Media.Brushes]::Black
 $win.ShowInTaskbar = $false
 $win.ResizeMode = [System.Windows.ResizeMode]::NoResize
 $win.ShowActivated = $false
@@ -108,7 +143,9 @@ $wv2 = New-Object Microsoft.Web.WebView2.Wpf.WebView2
 $wv2Props = New-Object Microsoft.Web.WebView2.Wpf.CoreWebView2CreationProperties
 $wv2Props.UserDataFolder = Join-Path $dotZcode 'butler-widget-wv2'
 $wv2.CreationProperties = $wv2Props
-$wv2.DefaultBackgroundColor = [System.Windows.Media.Colors]::Transparent   # 月牙空隙透出桌面
+# 底色与面板同黑(#030303):rgn 外 OS 不渲染;rgn 内被页面面板无缝覆盖,
+# fab 圆域内弧线周围的页面透明区落在这层黑上(视觉即齿轮气泡底色)
+$wv2.DefaultBackgroundColor = [System.Windows.Media.Color]::FromArgb(0xFF, 0x03, 0x03, 0x03)
 $win.Content = $wv2
 $script:wv2 = $wv2
 $script:pageReady = $false
@@ -265,6 +302,34 @@ function Get-WidgetHwnd {
   if ($script:helper) { return $script:helper.Handle }
   return [IntPtr]::Zero
 }
+function Set-WidgetRegion {
+  # 舞台(430×2025)→ 窗口物理像素:右贴齐 + 等比缩放;窗口形状 = 面板多边形 ∪ fab 圆
+  $h = Get-WidgetHwnd
+  if (([int64]$h) -eq 0 -or $script:outlinePts.Count -lt 3) { return }
+  $dpi = [ButlerNative.Win]::GetDpiForWindow($h)
+  if ($dpi -eq 0) { $dpi = 96 }
+  $k = ($script:winH * $dpi / 96.0) / 2025.0
+  $wp = [int][Math]::Round($script:winW * $dpi / 96.0)
+  $pts = [ButlerGdi+PT[]]::new($script:outlinePts.Count)
+  for ($i = 0; $i -lt $script:outlinePts.Count; $i++) {
+    # 值类型先整只装好再进数组:PS 对数组元素的结构体字段赋值不落盘(装箱副本)
+    $p = [ButlerGdi+PT]::new()
+    $p.X = [int][Math]::Round($wp - (430.0 - $script:outlinePts[$i][0]) * $k)
+    $p.Y = [int][Math]::Round($script:outlinePts[$i][1] * $k)
+    $pts[$i] = $p
+  }
+  $hPoly = [ButlerGdi]::CreatePolygonRgn($pts, $pts.Count, 2)
+  $r = 84.0                                    # 舞台单位:fab-zone 半径,罩住细弧线(R≈81)与齿轮气泡(R≈78)
+  $fx1 = [int][Math]::Round($wp - (430.0 - (317.0 - $r)) * $k)
+  $fx2 = [int][Math]::Round($wp - (430.0 - (317.0 + $r)) * $k)
+  $hCirc = [ButlerGdi]::CreateEllipticRgn($fx1, [int][Math]::Round((1675.0 - $r) * $k), $fx2, [int][Math]::Round((1675.0 + $r) * $k))
+  $hAll = [ButlerGdi]::CreateRectRgn(0, 0, 1, 1)
+  [void][ButlerGdi]::CombineRgn($hAll, $hPoly, $hCirc, 2)
+  $ok = [ButlerGdi]::SetWindowRgn($h, $hAll, $true)
+  WLog ('rgn set ok=' + $ok + ' k=' + [Math]::Round($k, 4) + ' wp=' + $wp + ' pts=' + $pts.Count)
+  [void][ButlerGdi]::DeleteObject($hPoly)
+  [void][ButlerGdi]::DeleteObject($hCirc)
+}
 function Move-WidgetPhysical([int]$x, [int]$y) {
   $h = Get-WidgetHwnd
   if (([int64]$h) -eq 0) { $win.Left = $x; $win.Top = $y; return }
@@ -276,7 +341,7 @@ function Position-Follow {
   $r = New-Object ButlerNative.Win+RECT
   [ButlerNative.Win]::GetWindowRect($script:zcodeHwnd, [ref]$r) | Out-Null
   $wh = Get-WidgetHwnd
-  $wphys = 146
+  $wphys = [int][Math]::Round($script:winW * 1.75)   # 兜底按 175% 估;实际以 GetWindowRect 为准
   if (([int64]$wh) -ne 0) {
     $wr = New-Object ButlerNative.Win+RECT
     [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
@@ -389,6 +454,7 @@ $script:helper = $null
 $win.Add_SourceInitialized({
   $script:helper = New-Object System.Windows.Interop.WindowInteropHelper($win)
   [void][ButlerNative.Win]::RegisterHotKey($script:helper.Handle, 0xB001, 0x6, 0x47)
+  Set-WidgetRegion
   $src = [System.Windows.Interop.HwndSource]::FromHwnd($script:helper.Handle)
   $src.AddHook({
     param($hwnd, $msg, $wParam, $lParam, [ref]$handled)
