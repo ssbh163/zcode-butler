@@ -2,15 +2,12 @@
 # =====================================================================
 # 码管家桌面悬浮窗(Windows PowerShell 5.1+ / WPF,零依赖,纯渲染壳)
 # 数据唯一来源:node status.mjs --json(协议 v1)——本文件不做任何取数/认证
-# UI 规格:Nothing 风格 D 形贴边胶囊(用户参考图,2026-09-11)+ §4.4 窗口跟随(WinEvent)
-#   - 胶囊:纯黑 #0A0A0A,右缘直边贴 ZCode、左侧半圆端(CornerRadius 28,0,0,28)
-#   - 三大环(5h池/每周/MCP):42px 细线环(线宽4,平头端帽,底轨 #2E2E2E)
-#     中心 MDL2 白色线性图标(闪电/日历/电源)+ 下方 11px 白色百分比
-#   - 色阶(环色随用量):<50 绿 #4ADE80 / 50-79 黄 #F2E33A / 80-89 橙 #E8722A / ≥90 红
-#   - Key 渐进环:30px 线宽2.8(MDL2 锁形),初始 1 个(pct 最高),点击 +1,上限 3
-#   - 铃铛行:MDL2 铃铛 + 红点徽标(未读数);点击左弹资讯面板
-#   - 设置圆钮:24px 灰底白 MDL2 齿轮,常显,悬停放大;点击左弹折叠配置卡
-#   - 悬停任意环:左弹详情气泡(纯黑);右键胶囊:快捷菜单;双击:收起为把手
+# UI 规格:PROJECT.md §4(Nothing 风格贴边胶囊)+ §4.4 窗口跟随(WinEvent)
+#   - 三大环(5h池/每周/MCP):42px 进度弧 + 中心图标 + 下方等宽百分比
+#   - Key 渐进环:30px,初始 1 个(pct 最高),点击 +1,上限 3
+#   - 铃铛环:红点徽标 = 未读数;点击左弹资讯面板
+#   - 设置小点:10px,悬停展开齿轮;点击左弹折叠配置卡(归档/Key管理/设置)
+#   - 悬停任意环:左弹详情气泡;右键胶囊:快捷菜单;双击:收起为把手
 #   - 窗口跟随:默认吸附 ZCode 主窗口右缘(WinEvent LOCATIONCHANGE + 33ms 节流);
 #     最小化隐藏/还原恢复;ZCode 退出退回屏幕右缘并低频重扫重吸附
 #   - 刷新:默认 110 分钟 + wake 文件 + 手动;Ctrl+Shift+G 显隐;单实例互斥量
@@ -100,23 +97,18 @@ Add-Type -TypeDefinition 'public static class ButlerState { public static volati
 $EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
 $WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
 
-# ---- 常量:颜色(Nothing 风格:纯黑胶囊 + 细彩环四档色阶)/ 字体 ----
-# 色阶:<50 绿 / 50-79 黄 / 80-89 橙 / ≥90 红(参考 MIUI 截图 #4ADE80/#F2E33A/#E8722A)
-$C_GREEN = '#4ADE80'; $C_YELLOW = '#F2E33A'; $C_ORANGE = '#E8722A'; $C_RED = '#FF5F5F'
-$C_TRACK = '#FF2E2E2E'; $C_ERR = '#8AFFFFFF'
-$C_TEXT = '#FFFFFFFF'; $C_SUB = '#99FFFFFF'; $C_FAINT = '#55FFFFFF'
-$C_BG = '#F20A0A0A'; $C_ACCENT = '#5AC8FA'
+# ---- 常量:颜色(§4.3)/ 字体 ----
+$C_GREEN = '#7EF0B2'; $C_YELLOW = '#FFC861'; $C_RED = '#FF5F5F'
+$C_TRACK = '#26FFFFFF'; $C_ERR = '#8AFFFFFF'
+$C_TEXT = '#F2FFFFFF'; $C_SUB = '#99FFFFFF'; $C_FAINT = '#55FFFFFF'
+$C_BG = '#F0161616'; $C_ACCENT = '#5AC8FA'
 $MONO = 'Consolas, 9.5'
-$MDL2 = 'Segoe MDL2 Assets'
 function Brush($hex) {
   if (-not $script:bc) { $script:bc = New-Object System.Windows.Media.BrushConverter }
   return $script:bc.ConvertFromString($hex)
 }
 function RateBrush([double]$p) {
-  if ($p -ge 90) { Brush $C_RED }
-  elseif ($p -ge 80) { Brush $C_ORANGE }
-  elseif ($p -ge 50) { Brush $C_YELLOW }
-  else { Brush $C_GREEN }
+  if ($p -ge 80) { Brush $C_RED } elseif ($p -ge 50) { Brush $C_YELLOW } else { Brush $C_GREEN }
 }
 
 # ---- 弧几何:从 12 点顺时针画 pct% 圆弧(Stroke 呈现;pct=100 用两段半圆) ----
@@ -172,7 +164,7 @@ function Format-Tokens([double]$v) {
 }
 
 # =====================================================================
-# XAML:主窗(D 形胶囊 64 宽右贴 ZCode 缘;外层 24 宽透明呼吸区)+ 右键菜单
+# XAML:主窗(胶囊 64 宽,右对齐;外层 24 宽透明呼吸区)+ 右键菜单
 # =====================================================================
 $xamlText = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -191,26 +183,28 @@ $xamlText = @'
     </ContextMenu>
   </Window.ContextMenu>
   <StackPanel Margin="20,8,0,8" HorizontalAlignment="Right">
-    <!-- 平时态:D 形胶囊贴 ZCode 右缘(右缘直边贴边,左侧半圆端),纯黑底 -->
-    <Border x:Name="Root" Width="64" CornerRadius="28,0,0,28" Background="#F20A0A0A"
-            Padding="6,10,7,10" Cursor="Hand">
+    <!-- 平时态:嵌入 ZCode 右缘的侧栏条(右缘贴边直角,底色=ZCode 输入框 #2B2B2B) -->
+    <Border x:Name="Root" Width="64" CornerRadius="0" Background="#FF2B2B2B"
+            Padding="6,8,7,8" Cursor="Hand">
       <StackPanel x:Name="NormalPanel">
         <StackPanel x:Name="Ring5h" Tag="5h" />
         <StackPanel x:Name="RingWeekly" Tag="weekly" />
         <StackPanel x:Name="RingMcp" Tag="mcp" />
-        <StackPanel x:Name="KeyArea" Margin="0,4,0,0" />
-        <Grid x:Name="BellRow" Height="34" Margin="0,6,0,0" />
+        <Rectangle Height="1" Fill="#22FFFFFF" Margin="2,6,2,6"/>
+        <StackPanel x:Name="KeyArea" />
+        <Rectangle x:Name="Sep2" Height="1" Fill="#22FFFFFF" Margin="2,6,2,6"/>
+        <Grid x:Name="BellRow" Height="34" />
       </StackPanel>
     </Border>
     <!-- 把手态(收起后):细竖条,贴右缘 -->
-    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="5,0,0,5" Background="#E60A0A0A"
+    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="3,0,0,3" Background="#CC2B2B2B"
             HorizontalAlignment="Right" Visibility="Collapsed" Cursor="Hand">
       <TextBlock Text="⟨" FontSize="11" Foreground="#99FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
-    <!-- 设置圆钮:常显 24px 灰底白齿轮(MDL2 线性),悬停放大;点击左弹折叠配置卡 -->
-    <Border x:Name="GearDot" Width="24" Height="24" CornerRadius="12" Background="#FF2E2E2E"
+    <!-- 设置小点:平时 10px 圆点,悬停展开为齿轮 -->
+    <Border x:Name="GearDot" Width="10" Height="10" CornerRadius="5" Background="#66FFFFFF"
             HorizontalAlignment="Right" Margin="0,10,0,0" Cursor="Hand" ToolTip="码管家设置">
-      <TextBlock x:Name="GearIcon" Text="⚙" FontSize="12" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+      <TextBlock x:Name="GearIcon" Text="" FontSize="11" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
   </StackPanel>
 </Window>
@@ -219,7 +213,7 @@ $win = [Windows.Markup.XamlReader]::Parse($xamlText)
 $el = { param($n) $win.FindName($n) }
 $Root = & $el 'Root'; $NormalPanel = & $el 'NormalPanel'
 $Ring5h = & $el 'Ring5h'; $RingWeekly = & $el 'RingWeekly'; $RingMcp = & $el 'RingMcp'
-$KeyArea = & $el 'KeyArea'; $BellRow = & $el 'BellRow'
+$KeyArea = & $el 'KeyArea'; $Sep2 = & $el 'Sep2'; $BellRow = & $el 'BellRow'
 $HandleRoot = & $el 'HandleRoot'
 $GearDot = & $el 'GearDot'; $GearIcon = & $el 'GearIcon'
 
@@ -228,40 +222,36 @@ $GearDot = & $el 'GearDot'; $GearIcon = & $el 'GearIcon'
 # =====================================================================
 function New-RingCtrl([string]$icon, [double]$size, [bool]$pctBelow) {
   # 返回 @{Panel;Arc;Icon;Pct} —— 环(底轨+弧+中心图标)+ 百分比文本(下方或右侧)
-  # Nothing 风格:细线环(线宽≈直径 9%)+ 平头端帽 + 中心 MDL2 线性图标
-  $stroke = 4.0
-  if ($size -lt 40) { $stroke = 2.8 }
   $panel = New-Object System.Windows.Controls.StackPanel
   $panel.HorizontalAlignment = 'Center'
   $grid = New-Object System.Windows.Controls.Grid
   $grid.Width = $size; $grid.Height = $size
   # 底轨:椭圆
   $track = New-Object System.Windows.Shapes.Ellipse
-  $track.Stroke = Brush $C_TRACK; $track.StrokeThickness = $stroke; $track.Fill = [System.Windows.Media.Brushes]::Transparent
+  $track.Stroke = Brush $C_TRACK; $track.StrokeThickness = 3.4; $track.Fill = [System.Windows.Media.Brushes]::Transparent
   $track.Width = $size; $track.Height = $size
   [void]$grid.Children.Add($track)
   # 进度弧
   $arc = New-Object System.Windows.Shapes.Path
-  $arc.StrokeThickness = $stroke; $arc.StrokeStartLineCap = 'Flat'; $arc.StrokeEndLineCap = 'Flat'
+  $arc.StrokeThickness = 3.4; $arc.StrokeStartLineCap = 'Round'; $arc.StrokeEndLineCap = 'Round'
   $arc.Width = $size; $arc.Height = $size
   $arc.Stretch = 'None'
   [void]$grid.Children.Add($arc)
-  # 中心图标(单色线性字形,着色随状态)
+  # 中心图标
   $iconTb = New-Object System.Windows.Controls.TextBlock
   $iconTb.Text = $icon
-  $iconTb.FontFamily = New-Object System.Windows.Media.FontFamily($MDL2)
-  $iconTb.FontSize = 14
-  if ($size -lt 40) { $iconTb.FontSize = 10 }
+  $iconTb.FontSize = 15
+  if ($size -lt 40) { $iconTb.FontSize = 11 }
   $iconTb.HorizontalAlignment = 'Center'; $iconTb.VerticalAlignment = 'Center'
   [void]$grid.Children.Add($iconTb)
   [void]$panel.Children.Add($grid)
   # 百分比文本
   $pct = New-Object System.Windows.Controls.TextBlock
   $pct.FontFamily = New-Object System.Windows.Media.FontFamily('Consolas')
-  $pct.FontSize = 11; $pct.Foreground = Brush $C_TEXT
+  $pct.FontSize = 9.5; $pct.Foreground = Brush $C_TEXT
   $pct.HorizontalAlignment = 'Center'
   if ($pctBelow) {
-    $pct.Margin = '0,3,0,0'
+    $pct.Margin = '0,2,0,0'
     [void]$panel.Children.Add($pct)
   } else {
     $panel.Orientation = 'Horizontal'
@@ -270,17 +260,17 @@ function New-RingCtrl([string]$icon, [double]$size, [bool]$pctBelow) {
     $pct.FontSize = 10; $pct.Margin = '6,0,0,0'; $pct.VerticalAlignment = 'Center'
     [void]$panel.Children.Add($pct)
   }
-  return @{ Panel = $panel; Arc = $arc; Icon = $iconTb; Pct = $pct; Glyph = $icon }
+  return @{ Panel = $panel; Arc = $arc; Icon = $iconTb; Pct = $pct }
 }
 
-# 大环(百分比在下)×3:闪电/日历/电源(MDL2 码位,PS5.1 无 `u 转义用 [char])
+# 大环(百分比在下)×3
 $script:bigRings = @(
-  @{ Ctrl = New-RingCtrl ([string][char]0xE945) 42 $true;  Name = '5小时池'; Tag = '5h' }
-  @{ Ctrl = New-RingCtrl ([string][char]0xE787) 42 $true;  Name = '每周额度'; Tag = 'weekly' }
-  @{ Ctrl = New-RingCtrl ([string][char]0xE7E8) 42 $true;  Name = 'MCP 月度'; Tag = 'mcp' }
+  @{ Ctrl = New-RingCtrl '⚡' 42 $true;  Name = '5小时池'; Tag = '5h' }
+  @{ Ctrl = New-RingCtrl '📆' 42 $true;  Name = '每周额度'; Tag = 'weekly' }
+  @{ Ctrl = New-RingCtrl '🔌' 42 $true;  Name = 'MCP 月度'; Tag = 'mcp' }
 )
 foreach ($r in $script:bigRings) {
-  $r.Ctrl.Panel.Margin = '0,0,0,9'
+  $r.Ctrl.Panel.Margin = '0,0,0,6'
   if ($r.Tag -eq '5h') { [void]$Ring5h.Children.Add($r.Ctrl.Panel) }
   elseif ($r.Tag -eq 'weekly') { [void]$RingWeekly.Children.Add($r.Ctrl.Panel) }
   else { [void]$RingMcp.Children.Add($r.Ctrl.Panel) }
@@ -294,19 +284,18 @@ $script:plusBadge = $null       # ⊕ 扩展按钮行
 function Update-RingVisual($ctrl, [double]$pct, [string]$pctText, [bool]$err) {
   if ($err) {
     $ctrl.Arc.Stroke = [System.Windows.Media.Brushes]::Transparent
-    $ctrl.Icon.Text = [string][char]0xE7BA   # MDL2 警告三角
+    $ctrl.Icon.Text = '!'
     $ctrl.Icon.Foreground = Brush $C_ERR
     $ctrl.Pct.Text = '—'
     $ctrl.Pct.Foreground = Brush $C_FAINT
     return
   }
-  $ctrl.Icon.Text = $ctrl.Glyph
   $ctrl.Icon.Foreground = Brush $C_TEXT
   $ctrl.Arc.Stroke = RateBrush $pct
   $g = New-ArcGeometry $ctrl.Arc.Width $ctrl.Arc.StrokeThickness $pct
   $ctrl.Arc.Data = $g
   $ctrl.Pct.Text = $pctText
-  $ctrl.Pct.Foreground = Brush $C_TEXT
+  $ctrl.Pct.Foreground = RateBrush $pct
 }
 
 function Rebuild-KeyRings {
@@ -322,12 +311,14 @@ function Rebuild-KeyRings {
   }
   for ($i = 0; $i -lt $n; $i++) {
     $k = $keys[$i]
-    $rc = New-RingCtrl ([string][char]0xE72E) 30 $false   # MDL2 锁形
+    $rc = New-RingCtrl '🔑' 30 $false
     $rc.Panel.Margin = '0,1,0,1'
     $script:keyRings += @{ Ctrl = $rc; Key = $k; Index = $i }
     [void]$KeyArea.Children.Add($rc.Panel)
     Update-RingVisual $rc ([double]$k.pct) ('{0}' -f [int][Math]::Round([double]$k.pct)) ($k.status -eq 'error')
   }
+  $Sep2.Visibility = 'Collapsed'
+  if ($keys.Count -gt 0) { $Sep2.Visibility = 'Visible' }
   # ⊕ 扩展行(未达 3 且有更多 Key)
   if ($keys.Count -gt $n) {
     $row = New-Object System.Windows.Controls.StackPanel
@@ -353,8 +344,8 @@ function Rebuild-KeyRings {
   } else { $script:plusBadge = $null }
 }
 
-# 铃铛行(MDL2 铃铛)
-$bellCtrl = New-RingCtrl ([string][char]0xE7ED) 30 $false
+# 铃铛行
+$bellCtrl = New-RingCtrl '🔔' 30 $false
 $bellCtrl.Panel.Margin = '0,1,0,1'
 [void]$BellRow.Children.Add($bellCtrl.Panel)
 $bellBadge = New-Object System.Windows.Controls.Border
@@ -374,7 +365,7 @@ $bellBadge.Child = $bellBadgeText
 $bubble = New-Object System.Windows.Controls.Primitives.Popup
 $bubble.Placement = 'Left'; $bubble.StaysOpen = $true; $bubble.AllowsTransparency = $true
 $bubbleRoot = New-Object System.Windows.Controls.Border
-$bubbleRoot.Background = Brush '#F50A0A0A'; $bubbleRoot.CornerRadius = '12'
+$bubbleRoot.Background = Brush '#F21A1A1A'; $bubbleRoot.CornerRadius = '10'
 $bubbleRoot.BorderBrush = Brush '#22FFFFFF'; $bubbleRoot.BorderThickness = '1'
 $bubbleRoot.Padding = '12,10,14,10'; $bubbleRoot.MaxWidth = 260
 $bubbleStack = New-Object System.Windows.Controls.StackPanel
@@ -382,7 +373,7 @@ $bubbleRoot.Child = $bubbleStack
 $bubbleGrid = New-Object System.Windows.Controls.Grid
 [void]$bubbleGrid.Children.Add($bubbleRoot)
 $bubbleArrow = New-Object System.Windows.Controls.TextBlock
-$bubbleArrow.Text = '▸'; $bubbleArrow.FontSize = 12; $bubbleArrow.Foreground = Brush '#F50A0A0A'
+$bubbleArrow.Text = '▸'; $bubbleArrow.FontSize = 12; $bubbleArrow.Foreground = Brush '#F21A1A1A'
 $bubbleArrow.VerticalAlignment = 'Center'; $bubbleArrow.HorizontalAlignment = 'Right'
 $bubbleArrow.Margin = '0,0,-2,0'
 [void]$bubbleGrid.Children.Add($bubbleArrow)
@@ -484,7 +475,7 @@ $newsPanel = New-Object System.Windows.Controls.Primitives.Popup
 $newsPanel.Placement = 'Left'; $newsPanel.VerticalOffset = -180
 $newsPanel.StaysOpen = $false; $newsPanel.AllowsTransparency = $true
 $newsRoot = New-Object System.Windows.Controls.Border
-$newsRoot.Background = Brush '#F50A0A0A'; $newsRoot.CornerRadius = '12'
+$newsRoot.Background = Brush '#F51C1C1C'; $newsRoot.CornerRadius = '12'
 $newsRoot.BorderBrush = Brush '#22FFFFFF'; $newsRoot.BorderThickness = '1'
 $newsRoot.Width = 300; $newsRoot.Padding = '14,12,14,12'
 $newsStack = New-Object System.Windows.Controls.StackPanel
@@ -573,7 +564,7 @@ $gearPanel = New-Object System.Windows.Controls.Primitives.Popup
 $gearPanel.Placement = 'Left'; $gearPanel.VerticalOffset = -260
 $gearPanel.StaysOpen = $false; $gearPanel.AllowsTransparency = $true
 $gearRoot = New-Object System.Windows.Controls.Border
-$gearRoot.Background = Brush '#F50A0A0A'; $gearRoot.CornerRadius = '12'
+$gearRoot.Background = Brush '#F51C1C1C'; $gearRoot.CornerRadius = '12'
 $gearRoot.BorderBrush = Brush '#22FFFFFF'; $gearRoot.BorderThickness = '1'
 $gearRoot.Width = 320; $gearRoot.Padding = '14,12,14,12'
 $gearStack = New-Object System.Windows.Controls.StackPanel
@@ -801,16 +792,16 @@ function Show-GearPanel {
   $gearPanel.IsOpen = $true
 }
 
-# 设置圆钮:常显灰底白齿轮(MDL2),悬停放大提亮,点击弹配置卡
-$GearIcon.FontFamily = New-Object System.Windows.Media.FontFamily($MDL2)
-$GearIcon.Text = [string][char]0xE713
+# 设置小点:悬停展开为齿轮,移开缩回;点击弹配置卡
 $GearDot.Add_MouseEnter({
-  $GearDot.Width = 28; $GearDot.Height = 28; $GearDot.CornerRadius = '14'
-  $GearDot.Background = Brush '#FF3A3A3A'
+  $GearDot.Width = 24; $GearDot.Height = 24; $GearDot.CornerRadius = '12'
+  $GearDot.Background = Brush '#55FFFFFF'
+  $GearIcon.Text = '⚙'
 })
 $GearDot.Add_MouseLeave({
-  $GearDot.Width = 24; $GearDot.Height = 24; $GearDot.CornerRadius = '12'
-  $GearDot.Background = Brush '#FF2E2E2E'
+  $GearDot.Width = 10; $GearDot.Height = 10; $GearDot.CornerRadius = '5'
+  $GearDot.Background = Brush '#66FFFFFF'
+  $GearIcon.Text = ''
 })
 $GearDot.Add_MouseLeftButtonUp({ Show-GearPanel })
 
