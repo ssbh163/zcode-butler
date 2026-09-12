@@ -122,9 +122,11 @@ function New-ArcGeometry([double]$size, [double]$stroke, [double]$pct) {
   $a0 = -[Math]::PI / 2
   if ($p -ge 0.9999) {
     # 整圆:两个半圆(ArcSegment 画不了 360°)
-    $fig.StartPoint = New-Object System.Windows.Point($cx - $r, $cy)
+    # 注意:New-Object X($a - $b, $c) 会被解析成 $a - ($b, $c)(逗号先成数组)→ op_Subtraction 异常;
+    # 含算术的构造参数必须整体加括号
+    $fig.StartPoint = New-Object System.Windows.Point(($cx - $r), $cy)
     $s1 = New-Object System.Windows.Media.ArcSegment
-    $s1.Point = New-Object System.Windows.Point($cx + $r, $cy)
+    $s1.Point = New-Object System.Windows.Point(($cx + $r), $cy)
     $s1.Size = New-Object System.Windows.Size($r, $r); $s1.SweepDirection = [System.Windows.Media.SweepDirection]::Clockwise
     $s2 = New-Object System.Windows.Media.ArcSegment
     $s2.Point = $fig.StartPoint
