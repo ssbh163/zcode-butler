@@ -103,6 +103,10 @@ try {
   }
 } catch { }
 WLog ('outline pts=' + $script:outlinePts.Count)
+# fab 弧线带几何:由页面实测后经消息送来(单一正本),到达前 fab 区域暂不裁入
+$script:fabBandPts = $null
+$script:fabBandCaps = $null
+$script:fabBandR = 13.6
 # PerMonitorV2(句柄 -4):跟随定位走物理像素,WPF 窗口必须同样按物理 DPI 对齐(M2 已验证)
 [void][ButlerNative.Win]::SetProcessDpiAwarenessContext([IntPtr](-4))
 
@@ -181,7 +185,19 @@ $wv2.Add_CoreWebView2InitializationCompleted({
     param($s2, $m)
     try {
       $msg = $m.TryGetWebMessageAsString()
-      if ($msg -like '*ready*') { $script:pageReady = $true; Push-Data }
+      if ($msg -like '{"type":"fabband"*') {
+        try {
+          $o = $msg | ConvertFrom-Json
+          $script:fabBandPts = @($o.pts)
+          $script:fabBandCaps = @($o.caps)
+          $script:fabBandR = [double]$o.r
+          Set-WidgetRegion 'base'
+          WLog ('fabband pts=' + $script:fabBandPts.Count)
+        } catch { WLog ('fabband THREW: ' + $_.Exception.Message) }
+      }
+      elseif ($msg -like '*fabenter*') { $fabCloseTimer.Stop(); Set-WidgetRegion 'open' }
+      elseif ($msg -like '*fableave*') { $fabCloseTimer.Stop(); $fabCloseTimer.Start() }
+      elseif ($msg -like '*ready*') { $script:pageReady = $true; Push-Data }
       elseif ($msg -like '*drag*') {
         try {
           $win.DragMove()
@@ -302,14 +318,16 @@ function Get-WidgetHwnd {
   if ($script:helper) { return $script:helper.Handle }
   return [IntPtr]::Zero
 }
-function Set-WidgetRegion {
-  # 舞台(430×2025)→ 窗口物理像素:右贴齐 + 等比缩放;窗口形状 = 面板多边形 ∪ fab 圆
+function Set-WidgetRegion([string]$mode) {
+  # 舞台(430×2025)→ 窗口物理像素:右贴齐 + 等比缩放
+  # 形状 = 面板胶囊 ∪ fab 域;base = 弧线细带+端帽(页面实测几何,带外无窗口=透桌面);open = 整圆(悬停齿轮气泡)
   $h = Get-WidgetHwnd
   if (([int64]$h) -eq 0 -or $script:outlinePts.Count -lt 3) { return }
   $dpi = [ButlerNative.Win]::GetDpiForWindow($h)
   if ($dpi -eq 0) { $dpi = 96 }
   $k = ($script:winH * $dpi / 96.0) / 2025.0
   $wp = [int][Math]::Round($script:winW * $dpi / 96.0)
+  $parts = New-Object System.Collections.ArrayList
   $pts = [ButlerGdi+PT[]]::new($script:outlinePts.Count)
   for ($i = 0; $i -lt $script:outlinePts.Count; $i++) {
     # 值类型先整只装好再进数组:PS 对数组元素的结构体字段赋值不落盘(装箱副本)
@@ -318,17 +336,42 @@ function Set-WidgetRegion {
     $p.Y = [int][Math]::Round($script:outlinePts[$i][1] * $k)
     $pts[$i] = $p
   }
-  $hPoly = [ButlerGdi]::CreatePolygonRgn($pts, $pts.Count, 2)
-  $r = 84.0                                    # 舞台单位:fab-zone 半径,罩住细弧线(R≈81)与齿轮气泡(R≈78)
-  $fx1 = [int][Math]::Round($wp - (430.0 - (317.0 - $r)) * $k)
-  $fx2 = [int][Math]::Round($wp - (430.0 - (317.0 + $r)) * $k)
-  $hCirc = [ButlerGdi]::CreateEllipticRgn($fx1, [int][Math]::Round((1675.0 - $r) * $k), $fx2, [int][Math]::Round((1675.0 + $r) * $k))
-  $hAll = [ButlerGdi]::CreateRectRgn(0, 0, 1, 1)
-  [void][ButlerGdi]::CombineRgn($hAll, $hPoly, $hCirc, 2)
-  $ok = [ButlerGdi]::SetWindowRgn($h, $hAll, $true)
-  WLog ('rgn set ok=' + $ok + ' k=' + [Math]::Round($k, 4) + ' wp=' + $wp + ' pts=' + $pts.Count)
-  [void][ButlerGdi]::DeleteObject($hPoly)
-  [void][ButlerGdi]::DeleteObject($hCirc)
+  [void]$parts.Add([ButlerGdi]::CreatePolygonRgn($pts, $pts.Count, 2))
+  if ($mode -eq 'open') {
+    $r = 84.0                                 # 舞台单位:fab-zone 半径,与 CSS 悬停判定圆一致
+    $fx1 = [int][Math]::Round($wp - (430.0 - (317.0 - $r)) * $k)
+    $fx2 = [int][Math]::Round($wp - (430.0 - (317.0 + $r)) * $k)
+    [void]$parts.Add([ButlerGdi]::CreateEllipticRgn($fx1, [int][Math]::Round((1675.0 - $r) * $k), $fx2, [int][Math]::Round((1675.0 + $r) * $k)))
+  }
+  elseif ($script:fabBandPts -and $script:fabBandPts.Count -ge 3) {
+    $bpts = [ButlerGdi+PT[]]::new($script:fabBandPts.Count)
+    for ($i = 0; $i -lt $script:fabBandPts.Count; $i++) {
+      $p = [ButlerGdi+PT]::new()
+      $p.X = [int][Math]::Round($wp - (430.0 - [double]$script:fabBandPts[$i][0]) * $k)
+      $p.Y = [int][Math]::Round([double]$script:fabBandPts[$i][1] * $k)
+      $bpts[$i] = $p
+    }
+    [void]$parts.Add([ButlerGdi]::CreatePolygonRgn($bpts, $bpts.Count, 2))
+    if ($script:fabBandCaps) {
+      $cr = [double]$script:fabBandR * $k     # 端帽圆(描边 round cap)
+      foreach ($cap in @($script:fabBandCaps)) {
+        $cx = [int][Math]::Round($wp - (430.0 - [double]$cap[0]) * $k)
+        $cy = [int][Math]::Round([double]$cap[1] * $k)
+        [void]$parts.Add([ButlerGdi]::CreateEllipticRgn([int]($cx - $cr), [int]($cy - $cr), [int]($cx + $cr), [int]($cy + $cr)))
+      }
+    }
+  }
+  $hRgn = [IntPtr]::Zero
+  if ($parts.Count -eq 1) { $hRgn = $parts[0] }
+  else {
+    $hRgn = [ButlerGdi]::CreateRectRgn(0, 0, 1, 1)
+    [void][ButlerGdi]::CombineRgn($hRgn, $parts[0], $parts[1], 2)
+    for ($j = 2; $j -lt $parts.Count; $j++) { [void][ButlerGdi]::CombineRgn($hRgn, $hRgn, $parts[$j], 2) }
+    foreach ($hp in $parts) { [void][ButlerGdi]::DeleteObject($hp) }
+  }
+  $ok = [ButlerGdi]::SetWindowRgn($h, $hRgn, $true)
+  WLog ('rgn(' + $mode + ') ok=' + $ok + ' parts=' + $parts.Count)
+  if (-not $ok) { [void][ButlerGdi]::DeleteObject($hRgn) }   # 成功则系统接管 rgn,失败才自清
 }
 function Move-WidgetPhysical([int]$x, [int]$y) {
   $h = Get-WidgetHwnd
@@ -454,7 +497,7 @@ $script:helper = $null
 $win.Add_SourceInitialized({
   $script:helper = New-Object System.Windows.Interop.WindowInteropHelper($win)
   [void][ButlerNative.Win]::RegisterHotKey($script:helper.Handle, 0xB001, 0x6, 0x47)
-  Set-WidgetRegion
+  Set-WidgetRegion 'base'
   $src = [System.Windows.Interop.HwndSource]::FromHwnd($script:helper.Handle)
   $src.AddHook({
     param($hwnd, $msg, $wParam, $lParam, [ref]$handled)
@@ -474,6 +517,11 @@ $win.Add_Closing({
     $mutex.ReleaseMutex() | Out-Null
   } catch { }
 })
+
+# fab 区域收回定时器:气泡淡出(0.26s CSS)后再缩回弧线带,450ms 留足余量;重入(fabenter)即取消
+$fabCloseTimer = New-Object System.Windows.Threading.DispatcherTimer
+$fabCloseTimer.Interval = [TimeSpan]::FromMilliseconds(450)
+$fabCloseTimer.Add_Tick({ $fabCloseTimer.Stop(); Set-WidgetRegion 'base' })
 
 # 唤醒:命名事件 + wake 文件(SessionStart hook touch)
 $wakeTimer = New-Object System.Windows.Threading.DispatcherTimer

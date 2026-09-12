@@ -482,6 +482,44 @@
       if (e.target.closest && e.target.closest('.fab-zone')) return;
       try { window.chrome.webview.postMessage('drag'); } catch (err) { }
     });
+    /* fab 域动态几何:默认窗口区域只裁到弧线细带(带外无窗口=透桌面);
+       悬停时宿主临时扩成整圆容纳齿轮气泡,移开 450ms 后收回 */
+    (function () {
+      var arc = document.getElementById('arcPath');
+      if (!arc || !arc.getTotalLength) return;
+      var L = arc.getTotalLength();
+      if (!(L > 0)) return;
+      var N = 64, half = 22.3 / 2 + 2.5;   /* 半描边宽 + 抗锯齿余量(舞台px) */
+      var outer = [], inner = [], i, t, p, q, dx, dy, ln, nx, ny;
+      for (i = 0; i <= N; i++) {
+        t = L * i / N;
+        p = arc.getPointAtLength(t);
+        q = arc.getPointAtLength(Math.min(L, t + 0.5));
+        dx = q.x - p.x; dy = q.y - p.y; ln = Math.hypot(dx, dy) || 1;
+        nx = -dy / ln; ny = dx / ln;
+        /* svg(193×193,1:1)左上角 = fab-zone(233,1591) + fab 偏移(-12.5,-13) = 舞台(220.5,1578) */
+        outer.push([p.x + nx * half + 220.5, p.y + ny * half + 1578]);
+        inner.push([p.x - nx * half + 220.5, p.y - ny * half + 1578]);
+      }
+      var p0 = arc.getPointAtLength(0), p1 = arc.getPointAtLength(L);
+      try {
+        window.chrome.webview.postMessage(JSON.stringify({
+          type: 'fabband',
+          pts: outer.concat(inner.reverse()),
+          caps: [[p0.x + 220.5, p0.y + 1578], [p1.x + 220.5, p1.y + 1578]],
+          r: half
+        }));
+      } catch (err) { }
+      var fz = document.getElementById('fabZone');
+      if (fz) {
+        fz.addEventListener('pointerenter', function () {
+          try { window.chrome.webview.postMessage('fabenter'); } catch (err) { }
+        });
+        fz.addEventListener('pointerleave', function () {
+          try { window.chrome.webview.postMessage('fableave'); } catch (err) { }
+        });
+      }
+    })();
   }
 </script>
 </body>
