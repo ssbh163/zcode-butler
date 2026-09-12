@@ -15,10 +15,27 @@
 - **IntPtr 比较用 `([int64]$h) -eq 0`**,装箱 `-eq [IntPtr]::Zero` 不可靠
 - **块注释里的 `*/` 字样会提前闭合注释**(`options.*/顶层` 截断 JSDoc);`Promise.resolve().then` 回调里调 async 函数必须 await
 - **`node --test <目录>` 在 Windows(Node 22.12)不工作**,须递归 glob;杀诊断目标的进程查询要拆串防自匹配
+- **Add-Type 裸 `-TypeDefinition` 不自动带 using**(只有 `-MemberDefinition` 模板带):DllImport/StructLayout 必须自己 `using System.Runtime.InteropServices;`,否则编译失败被 `$ErrorActionPreference=SilentlyContinue` 静默吞,下游类型全 null($null.Count 巧合为 0,极具迷惑性,2026-09-13 实测)
+- **正则非贪婪到 `]` 在嵌套数组第一对就截断**:提取 JS `[[x,y],[x,y]...]` 须锚到 `];`(数组真结束符;内层成对只有 `],`)
+- **Win11 26200 上 WPF 窗口 SetWindowLong(GWL_EXSTYLE) 假成功**:返回旧值但 WS_EX_LAYERED 不落盘(裸窗口复测成立),色键透明路线不可用 → 形状窗口用 SetWindowRgn
 
 ---
 
 ## 开发日志(倒序)
+
+### 2026-09-13 [修复] v0.2.0 白底根因与 v0.2.1 形状裁剪(e10d019)
+
+**问题**:用户验收三连——①面板周围一圈白色矩形;②悬浮窗偏大;③fab 弧线按钮悬停动画不触发。
+**根因(①③同源)**:`AllowsTransparency=true` 的 WPF 分层窗口只对 WPF 自绘像素生效,WebView2 是 HwndHost 子窗口不参与其透明合成 → 页面透明区被子窗口以不透明底(白)呈现;鼠标命中链路同受分层窗口影响,CSS `:hover` 收不到 → 悬停变形失效。v0.2.0 的"透明验证通过"实为截图宿主恰是白色(ZCode 编辑区),白对白没看出来——**透明验证必须在非白背景上做**。
+**方案迭代**:
+1. 色键透明(WS_EX_LAYERED + LWA_COLORKEY 品红 + DefaultBackgroundColor 同色):最小复现两轮,SetWindowLong 返回旧值但 exstyle 不落盘(裸 WPF 窗口也复现)→ 本机(Win11 26200)此路不通;
+2. **SetWindowRgn 形状裁剪(最终采用)**:普通无边框窗 + 面板轮廓多边形 ∪ fab 圆(舞台 r84);轮廓点运行时从 HTML `outline` 数组正则提取(单一正本);区域外 OS 不渲染、点击自然穿透;WebView/WPF 底色改面板同黑 #030303。
+**连环坑(当日)**:①Webview2 UDF 跨进程单例锁——复现实例与主悬浮窗共用 `~/.zcode/butler-widget-wv2` 报 0x8007139F,复现须独立目录;②裸 `-TypeDefinition` 缺 using 编译失败被静默吞($null.Count=0 伪装成"空数组");③非贪婪 `\]` 提取 outline 只拿到 1 对(pts=1);④py heredoc 改文件转义错误第三次现身,一律用 Edit 工具。
+**改动**:仅 butler-widget.ps1;尺寸 780→600 DIP(②用户要求,114×1050 物理);HTML 零改动。
+**验证**:1:1 截图白底消失、胶囊形态完整、四环真实数据;真鼠标(SetCursorPos)悬停 fab → 齿轮气泡绽开,截图确认;node 45 + py 23 回归通过。
+**遗留**:拖动/热键/跟随/最小化恢复仍待真机人工;fab 圆域弧线周围垫黑底(设计稿悬于壁纸,窗口化 WebView2 无窗口级真透明,记录在 WIKI 已知限制)。
+**耗时**:约 2h(根因定位 0.5h / 色键两轮复现 0.5h / rgn 实现+连环坑 0.5h / 验证回归文档 0.5h)。
+**commit**:e10d019。
 
 ### 2026-09-13 [实现] 悬浮窗 WebView2 方案落地(用户定稿 HTML 直载,c5a49ea)
 
