@@ -482,44 +482,62 @@
       if (e.target.closest && e.target.closest('.fab-zone')) return;
       try { window.chrome.webview.postMessage('drag'); } catch (err) { }
     });
-    /* fab 域动态几何:默认窗口区域只裁到弧线细带(带外无窗口=透桌面);
-       悬停时宿主临时扩成整圆容纳齿轮气泡,移开 450ms 后收回 */
-    (function () {
+    /* 形状上报:布局落定后把面板轮廓/fab 弧线带映射到视口坐标发给宿主建 rgn。
+       以页面实测为准——宿主端按 DIP×DPI 推算与真实渲染有 ~3px 偏差(实测事故),
+       推算区域比实际画的大,露出 WebView 控件区白底,即用户看到的 1px 环绕白边 */
+    function butlerReportShape() {
+      var stage = document.querySelector('.stage');
+      var panel = document.getElementById('panelPath');
+      if (!stage || !panel) return;
+      var sr = stage.getBoundingClientRect();
+      var kx = sr.width / 430, ky = sr.height / 2025;
+      var caps = outline.map(function (p) { return [sr.left + p[0] * kx, sr.top + p[1] * ky]; });
+      function mapF(v) { return [sr.left + (v[0] + 220.5) * kx, sr.top + (v[1] + 1578) * ky]; }
+      var band = null, arcCaps = null, bandR = 0, fabC = null, fabR = 0;
       var arc = document.getElementById('arcPath');
-      if (!arc || !arc.getTotalLength) return;
-      var L = arc.getTotalLength();
-      if (!(L > 0)) return;
-      var N = 64, half = 22.3 / 2 + 2.5;   /* 半描边宽 + 抗锯齿余量(舞台px) */
-      var outer = [], inner = [], i, t, p, q, dx, dy, ln, nx, ny;
-      for (i = 0; i <= N; i++) {
-        t = L * i / N;
-        p = arc.getPointAtLength(t);
-        q = arc.getPointAtLength(Math.min(L, t + 0.5));
-        dx = q.x - p.x; dy = q.y - p.y; ln = Math.hypot(dx, dy) || 1;
-        nx = -dy / ln; ny = dx / ln;
-        /* svg(193×193,1:1)左上角 = fab-zone(233,1591) + fab 偏移(-12.5,-13) = 舞台(220.5,1578) */
-        outer.push([p.x + nx * half + 220.5, p.y + ny * half + 1578]);
-        inner.push([p.x - nx * half + 220.5, p.y - ny * half + 1578]);
+      if (arc && arc.getTotalLength) {
+        var L = arc.getTotalLength();
+        if (L > 0) {
+          var half = 22.3 / 2 + 2.5, outer = [], inner = [], i, t, p, q, dx, dy, ln, nx, ny;
+          for (i = 0; i <= 64; i++) {
+            t = L * i / 64;
+            p = arc.getPointAtLength(t);
+            q = arc.getPointAtLength(Math.min(L, t + 0.5));
+            dx = q.x - p.x; dy = q.y - p.y; ln = Math.hypot(dx, dy) || 1;
+            nx = -dy / ln; ny = dx / ln;
+            /* svg(193×193,1:1)左上角 = 舞台(220.5,1578) */
+            outer.push([p.x + nx * half, p.y + ny * half]);
+            inner.push([p.x - nx * half, p.y - ny * half]);
+          }
+          var p0 = arc.getPointAtLength(0), p1 = arc.getPointAtLength(L);
+          band = outer.concat(inner.reverse()).map(mapF);
+          arcCaps = [mapF([p0.x, p0.y]), mapF([p1.x, p1.y])];
+          bandR = half * kx;
+          fabC = [sr.left + 317 * kx, sr.top + 1675 * ky];
+          fabR = 84 * kx;
+        }
       }
-      var p0 = arc.getPointAtLength(0), p1 = arc.getPointAtLength(L);
       try {
+        var pb = panel.getBoundingClientRect(), ab = arc ? arc.getBoundingClientRect() : null;
         window.chrome.webview.postMessage(JSON.stringify({
-          type: 'fabband',
-          pts: outer.concat(inner.reverse()),
-          caps: [[p0.x + 220.5, p0.y + 1578], [p1.x + 220.5, p1.y + 1578]],
-          r: half
+          type: 'shape', dpr: (window.devicePixelRatio || 1),
+          capsule: caps, band: band, caps: arcCaps, bandR: bandR, fabC: fabC, fabR: fabR,
+          dbgPanelBox: [pb.left, pb.top, pb.right, pb.bottom],
+          dbgArcBox: ab ? [ab.left, ab.top, ab.right, ab.bottom] : null
         }));
       } catch (err) { }
-      var fz = document.getElementById('fabZone');
-      if (fz) {
-        fz.addEventListener('pointerenter', function () {
-          try { window.chrome.webview.postMessage('fabenter'); } catch (err) { }
-        });
-        fz.addEventListener('pointerleave', function () {
-          try { window.chrome.webview.postMessage('fableave'); } catch (err) { }
-        });
-      }
-    })();
+    }
+    if (document.readyState === 'complete') { requestAnimationFrame(butlerReportShape); }
+    else { window.addEventListener('load', function () { requestAnimationFrame(butlerReportShape); }); }
+    var fz = document.getElementById('fabZone');
+    if (fz) {
+      fz.addEventListener('pointerenter', function () {
+        try { window.chrome.webview.postMessage('fabenter'); } catch (err) { }
+      });
+      fz.addEventListener('pointerleave', function () {
+        try { window.chrome.webview.postMessage('fableave'); } catch (err) { }
+      });
+    }
   }
 </script>
 </body>

@@ -103,10 +103,15 @@ try {
   }
 } catch { }
 WLog ('outline pts=' + $script:outlinePts.Count)
-# fab 弧线带几何:由页面实测后经消息送来(单一正本),到达前 fab 区域暂不裁入
-$script:fabBandPts = $null
-$script:fabBandCaps = $null
-$script:fabBandR = 13.6
+# 页面实测形状(shape 消息):轮廓/弧带/端帽/fab 圆心的视口坐标 + dpr。
+# 宿主只做 ×dpr,不再自己推算——DIP×DPI 推算与真实渲染有 ~3px 偏差(白边事故)
+$script:pageDpr = 0
+$script:shapeCapsule = $null
+$script:shapeBand = $null
+$script:shapeCaps = $null
+$script:shapeBandR = 0
+$script:shapeFabC = $null
+$script:shapeFabR = 0
 # PerMonitorV2(句柄 -4):跟随定位走物理像素,WPF 窗口必须同样按物理 DPI 对齐(M2 已验证)
 [void][ButlerNative.Win]::SetProcessDpiAwarenessContext([IntPtr](-4))
 
@@ -149,6 +154,7 @@ $wv2Props.UserDataFolder = Join-Path $dotZcode 'butler-widget-wv2'
 $wv2.CreationProperties = $wv2Props
 # 底色与面板同黑(#030303):rgn 外 OS 不渲染;rgn 内被页面面板无缝覆盖,
 # fab 圆域内弧线周围的页面透明区落在这层黑上(视觉即齿轮气泡底色)
+# 底色与面板同黑(#030303):rgn 外 OS 不渲染;rgn 内被页面面板无缝覆盖
 $wv2.DefaultBackgroundColor = [System.Windows.Media.Color]::FromArgb(0xFF, 0x03, 0x03, 0x03)
 $win.Content = $wv2
 $script:wv2 = $wv2
@@ -185,15 +191,28 @@ $wv2.Add_CoreWebView2InitializationCompleted({
     param($s2, $m)
     try {
       $msg = $m.TryGetWebMessageAsString()
-      if ($msg -like '{"type":"fabband"*') {
+      if ($msg -like '{"type":"shape"*') {
         try {
           $o = $msg | ConvertFrom-Json
-          $script:fabBandPts = @($o.pts)
-          $script:fabBandCaps = @($o.caps)
-          $script:fabBandR = [double]$o.r
+          $script:pageDpr = [double]$o.dpr
+          $script:shapeCapsule = @($o.capsule)
+          $script:shapeBand = @($o.band)
+          $script:shapeCaps = @($o.caps)
+          $script:shapeBandR = [double]$o.bandR
+          $script:shapeFabC = @($o.fabC)
+          $script:shapeFabR = [double]$o.fabR
           Set-WidgetRegion 'base'
-          WLog ('fabband pts=' + $script:fabBandPts.Count)
-        } catch { WLog ('fabband THREW: ' + $_.Exception.Message) }
+          $bx0 = 1e9; $bx1 = -1e9; $by0 = 1e9; $by1 = -1e9
+          foreach ($bp in $script:shapeBand) {
+            $bx = [double]$bp[0] * $script:pageDpr; $by = [double]$bp[1] * $script:pageDpr
+            if ($bx -lt $bx0) { $bx0 = $bx }; if ($bx -gt $bx1) { $bx1 = $bx }
+            if ($by -lt $by0) { $by0 = $by }; if ($by -gt $by1) { $by1 = $by }
+          }
+          WLog ('shape capsule=' + $script:shapeCapsule.Count + ' dpr=' + $script:pageDpr +
+            ' bandBox=[' + [int]$bx0 + ',' + [int]$by0 + ']-[' + [int]$bx1 + ',' + [int]$by1 + ']' +
+            ' panelBox=' + (($o.dbgPanelBox | ForEach-Object { [Math]::Round([double]$_ * $script:pageDpr) }) -join ',') +
+            ' arcBox=' + ($(if ($o.dbgArcBox) { ($o.dbgArcBox | ForEach-Object { [Math]::Round([double]$_ * $script:pageDpr) }) -join ',' } else { 'null' })))
+        } catch { WLog ('shape THREW: ' + $_.Exception.Message) }
       }
       elseif ($msg -like '*fabenter*') { $fabCloseTimer.Stop(); Set-WidgetRegion 'open' }
       elseif ($msg -like '*fableave*') { $fabCloseTimer.Stop(); $fabCloseTimer.Start() }
@@ -319,45 +338,73 @@ function Get-WidgetHwnd {
   return [IntPtr]::Zero
 }
 function Set-WidgetRegion([string]$mode) {
-  # 舞台(430×2025)→ 窗口物理像素:右贴齐 + 等比缩放
-  # 形状 = 面板胶囊 ∪ fab 域;base = 弧线细带+端帽(页面实测几何,带外无窗口=透桌面);open = 整圆(悬停齿轮气泡)
+  # 形状 = 面板胶囊 ∪ fab 域;base = 弧线细带+端帽(带外无窗口=透桌面);open = 整圆(悬停齿轮气泡)
+  # 坐标优先用页面 shape 消息的视口实测值(×dpr);shape 未到时回退 outline 正则推算(仅启动瞬间)
   $h = Get-WidgetHwnd
-  if (([int64]$h) -eq 0 -or $script:outlinePts.Count -lt 3) { return }
-  $dpi = [ButlerNative.Win]::GetDpiForWindow($h)
-  if ($dpi -eq 0) { $dpi = 96 }
-  $k = ($script:winH * $dpi / 96.0) / 2025.0
-  $wp = [int][Math]::Round($script:winW * $dpi / 96.0)
+  if (([int64]$h) -eq 0) { return }
+  $dpr = [double]$script:pageDpr
+  if ($dpr -le 0) {
+    $d = [ButlerNative.Win]::GetDpiForWindow($h)
+    if ($d -eq 0) { $d = 96 }
+    $dpr = $d / 96.0
+  }
+  $src = 'shape'
+  $k = 0.0; $wp = 0
   $parts = New-Object System.Collections.ArrayList
-  $pts = [ButlerGdi+PT[]]::new($script:outlinePts.Count)
-  for ($i = 0; $i -lt $script:outlinePts.Count; $i++) {
-    # 值类型先整只装好再进数组:PS 对数组元素的结构体字段赋值不落盘(装箱副本)
-    $p = [ButlerGdi+PT]::new()
-    $p.X = [int][Math]::Round($wp - (430.0 - $script:outlinePts[$i][0]) * $k)
-    $p.Y = [int][Math]::Round($script:outlinePts[$i][1] * $k)
-    $pts[$i] = $p
-  }
-  [void]$parts.Add([ButlerGdi]::CreatePolygonRgn($pts, $pts.Count, 2))
-  if ($mode -eq 'open') {
-    $r = 84.0                                 # 舞台单位:fab-zone 半径,与 CSS 悬停判定圆一致
-    $fx1 = [int][Math]::Round($wp - (430.0 - (317.0 - $r)) * $k)
-    $fx2 = [int][Math]::Round($wp - (430.0 - (317.0 + $r)) * $k)
-    [void]$parts.Add([ButlerGdi]::CreateEllipticRgn($fx1, [int][Math]::Round((1675.0 - $r) * $k), $fx2, [int][Math]::Round((1675.0 + $r) * $k)))
-  }
-  elseif ($script:fabBandPts -and $script:fabBandPts.Count -ge 3) {
-    $bpts = [ButlerGdi+PT[]]::new($script:fabBandPts.Count)
-    for ($i = 0; $i -lt $script:fabBandPts.Count; $i++) {
+  $capPts = $null
+  if ($script:shapeCapsule -and $script:shapeCapsule.Count -ge 3) {
+    $capPts = [ButlerGdi+PT[]]::new($script:shapeCapsule.Count)
+    for ($i = 0; $i -lt $script:shapeCapsule.Count; $i++) {
+      # 值类型先整只装好再进数组:PS 对数组元素的结构体字段赋值不落盘(装箱副本)
       $p = [ButlerGdi+PT]::new()
-      $p.X = [int][Math]::Round($wp - (430.0 - [double]$script:fabBandPts[$i][0]) * $k)
-      $p.Y = [int][Math]::Round([double]$script:fabBandPts[$i][1] * $k)
+      $p.X = [int][Math]::Round([double]$script:shapeCapsule[$i][0] * $dpr)
+      $p.Y = [int][Math]::Round([double]$script:shapeCapsule[$i][1] * $dpr)
+      $capPts[$i] = $p
+    }
+  }
+  elseif ($script:outlinePts.Count -ge 3) {
+    $src = 'calc'
+    $k = ($script:winH * $dpr) / 2025.0
+    $wp = [int][Math]::Round($script:winW * $dpr)
+    $capPts = [ButlerGdi+PT[]]::new($script:outlinePts.Count)
+    for ($i = 0; $i -lt $script:outlinePts.Count; $i++) {
+      $p = [ButlerGdi+PT]::new()
+      $p.X = [int][Math]::Round($wp - (430.0 - $script:outlinePts[$i][0]) * $k)
+      $p.Y = [int][Math]::Round($script:outlinePts[$i][1] * $k)
+      $capPts[$i] = $p
+    }
+  }
+  if (-not $capPts) { return }
+  [void]$parts.Add([ButlerGdi]::CreatePolygonRgn($capPts, $capPts.Count, 2))
+  if ($mode -eq 'open') {
+    if ($script:shapeFabC) {
+      $cx = [int][Math]::Round([double]$script:shapeFabC[0] * $dpr)
+      $cy = [int][Math]::Round([double]$script:shapeFabC[1] * $dpr)
+      $r = [int][Math]::Round([double]$script:shapeFabR * $dpr)
+      [void]$parts.Add([ButlerGdi]::CreateEllipticRgn(($cx - $r), ($cy - $r), ($cx + $r), ($cy + $r)))
+    }
+    elseif ($k -gt 0) {
+      $r = [int][Math]::Round(84.0 * $k)
+      $cx = [int][Math]::Round($wp - (430.0 - 317.0) * $k)
+      $cy = [int][Math]::Round(1675.0 * $k)
+      [void]$parts.Add([ButlerGdi]::CreateEllipticRgn(($cx - $r), ($cy - $r), ($cx + $r), ($cy + $r)))
+    }
+  }
+  elseif ($script:shapeBand -and $script:shapeBand.Count -ge 3) {
+    $bpts = [ButlerGdi+PT[]]::new($script:shapeBand.Count)
+    for ($i = 0; $i -lt $script:shapeBand.Count; $i++) {
+      $p = [ButlerGdi+PT]::new()
+      $p.X = [int][Math]::Round([double]$script:shapeBand[$i][0] * $dpr)
+      $p.Y = [int][Math]::Round([double]$script:shapeBand[$i][1] * $dpr)
       $bpts[$i] = $p
     }
     [void]$parts.Add([ButlerGdi]::CreatePolygonRgn($bpts, $bpts.Count, 2))
-    if ($script:fabBandCaps) {
-      $cr = [double]$script:fabBandR * $k     # 端帽圆(描边 round cap)
-      foreach ($cap in @($script:fabBandCaps)) {
-        $cx = [int][Math]::Round($wp - (430.0 - [double]$cap[0]) * $k)
-        $cy = [int][Math]::Round([double]$cap[1] * $k)
-        [void]$parts.Add([ButlerGdi]::CreateEllipticRgn([int]($cx - $cr), [int]($cy - $cr), [int]($cx + $cr), [int]($cy + $cr)))
+    if ($script:shapeCaps) {
+      $cr = [double]$script:shapeBandR * $dpr    # 端帽圆(描边 round cap)
+      foreach ($cap in @($script:shapeCaps)) {
+        $ccx = [int][Math]::Round([double]$cap[0] * $dpr)
+        $ccy = [int][Math]::Round([double]$cap[1] * $dpr)
+        [void]$parts.Add([ButlerGdi]::CreateEllipticRgn([int]($ccx - $cr), [int]($ccy - $cr), [int]($ccx + $cr), [int]($ccy + $cr)))
       }
     }
   }
@@ -370,7 +417,7 @@ function Set-WidgetRegion([string]$mode) {
     foreach ($hp in $parts) { [void][ButlerGdi]::DeleteObject($hp) }
   }
   $ok = [ButlerGdi]::SetWindowRgn($h, $hRgn, $true)
-  WLog ('rgn(' + $mode + ') ok=' + $ok + ' parts=' + $parts.Count)
+  WLog ('rgn(' + $mode + '/' + $src + ') ok=' + $ok + ' parts=' + $parts.Count)
   if (-not $ok) { [void][ButlerGdi]::DeleteObject($hRgn) }   # 成功则系统接管 rgn,失败才自清
 }
 function Move-WidgetPhysical([int]$x, [int]$y) {
