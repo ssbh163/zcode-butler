@@ -64,7 +64,7 @@ assets/news.json ──> news.mjs
 ### 6. 悬浮窗(as-built,§4 的实现现状)
 
 - 架构(2026-09-13 v0.2.1 起,WebView2 方案):**WPF 窗口 + WebView2 控件做宿主壳,`butler-widget.html` 做全部渲染**。壳只管窗口/取数/桥接:无边框置顶窗(64×600 DIP,PerMonitorV2 DPI)、`node status.mjs --json`(异步+临时文件+UTF8+完整性校验,110 分钟定时)→ `CoreWebView2.PostWebMessageAsJson` 投给页面 `butlerApply`(收到页面 ready 消息后才投)。vendored DLL 在 `scripts/widget/webview2/`(NuGet 1.0.2739.15,x64,仅 LoadFrom 两个托管程序集);原生 `WebView2Loader.dll` 经 PATH 前置解析;用户数据目录显式指 `~/.zcode/butler-widget-wv2`(默认目录随宿主 exe 落 System32,不可写必失败;**同目录跨进程单例锁,并发第二实例报 0x8007139F**)
-- 窗口形状(v0.2.2):**SetWindowRgn 动态裁剪**。默认态 = 面板轮廓多边形 ∪ fab 弧线细带+端帽(带外无窗口,桌面直透、点击穿透);悬停态 = 胶囊 ∪ fab 整圆(舞台 r84,容纳齿轮气泡),由页面 `pointerenter/pointerleave` 桥控制切换,移开 450ms 后收回(气泡 CSS 淡出 0.26s 留余量)。轮廓点运行时从 HTML `outline` 正则提取,弧线带几何由页面 `getPointAtLength` 实测后经 `fabband` 消息送宿主(单一正本,无复制常量)。**不使用 AllowsTransparency**:WPF 分层窗口对 WebView2(HwndHost 子窗口)不参与透明合成——月牙空隙刷白底、鼠标命中异常(v0.2.0 实测);WS_EX_LAYERED 色键路线在本机(Win11 26200)也走不通(SetWindowLong 假成功,样式不落盘)。窗口底层与 WebView `DefaultBackgroundColor` 均为面板同黑 #030303(弧线本体同色,裁剪边缘无缝)
+- 窗口形状(v0.2.3):**SetWindowRgn 动态裁剪,坐标以页面实测为准**。页面加载后经 `shape` 消息上报视口坐标(胶囊轮廓/弧线带+端帽/fab 圆心半径 + dpr),宿主只做 ×dpr——宿主按 DIP×DPI 推算与真实渲染有 ~3px 偏差(v0.2.2 白边事故:推算区域偏大露出 WebView 控件区白底),推算仅作 shape 未到时的启动瞬间回退。默认态 = 胶囊 ∪ fab 弧线细带+端帽(带外无窗口,桌面直透、点击穿透);悬停态 = 胶囊 ∪ fab 整圆(容纳齿轮气泡),由页面 `pointerenter/pointerleave` 桥控制切换,移开 450ms 后收回。**不使用 AllowsTransparency**(分层窗口对 HwndHost 不参与透明合成,白底+命中异常);WS_EX_LAYERED 色键在本机(Win11 26200)SetWindowLong 假成功走不通。窗口底层与 WebView `DefaultBackgroundColor` 均为面板同黑 #030303
 - 渲染层:用户定稿 HTML 副本 + 五处最小改动(去壁纸 / 舞台贴右 + fit 按窗高等比缩放 / 数据桥 butlerSetRing·butlerApply / 拖动桥 / 无)。四环 = 5h 池 / 每周 / MCP 月 / 用量最高 Key,环心文字 glyph(5h/7d/mcp/key)+ 下方百分比;高峰橙色光晕由页面按本机时间判(工作日 14–18 点);fab 细弧悬停变形齿轮气泡(纯 CSS :hover,已实测生效)
 - 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
 - 交互:面板拖动 = 页面 pointerdown → 宿主 DragMove → 折算 offsetY 记 `butler-widget.pos.json`(fab 区除外);Ctrl+Shift+G 显隐;wake 双通道唤回;fab 齿轮为页面内悬停变形 + 点击反馈,**暂无宿主动作**(设置卡/Key 管理/资讯面板待 HTML 内重建,见已知限制)
@@ -102,6 +102,13 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 ## 二、变更历史
 
 (按时间倒序,每条含:背景 / 改动 / 影响范围 / 回滚方案)
+
+### [v0.2.3] 2026-09-13 消除 1px 环绕白边(区域坐标改页面实测)
+
+- **背景**:用户指出悬浮窗边缘仍有 1px 环绕背景。像素剖面定位:左缘结构 = 背景 → 2px 纯白(255) → 过渡灰 → 面板黑。
+- **改动**:排除法归因(DefaultBackgroundColor 换红不受影响 → 非 WebView 底色;负 Margin 反而加宽 → 非静态缝隙)后定位为宿主推算偏差:窗口 DPI 171 与页面 devicePixelRatio 1.75 的舍入差,推算区域比页面真实渲染大 ~3px,多出的区域露出 WebView2 控件区白底(该控件区不受 DefaultBackgroundColor 控制)。治本:页面 `shape` 消息(getBoundingClientRect 实测)上报胶囊轮廓/弧带/端帽/fab 圆的视口坐标 + dpr,宿主一律 ×dpr 建 rgn,推算路径仅作 shape 未到时的启动瞬间回退。
+- **影响范围**:butler-widget.html + butler-widget.ps1;status 协议零改动;实测左缘 = 背景 → 1px 抗锯齿 → 面板黑(白条消失),右缘到底纯黑,弧线在真实位置(红色描边实验验证绘制与裁剪均正常);回归 45+23 通过。
+- **回滚方案**:`git checkout 882a9ea -- plugins/zcode-butler/scripts/widget/` 回推算坐标版(白边回来但稳定)。
 
 ### [v0.2.2] 2026-09-13 fab 大黑圆垫改动态窗口区域(弧线悬浮于桌面)
 
