@@ -101,7 +101,7 @@ $WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
 $C_GREEN = '#7EF0B2'; $C_YELLOW = '#FFC861'; $C_RED = '#FF5F5F'
 $C_TRACK = '#26FFFFFF'; $C_ERR = '#8AFFFFFF'
 $C_TEXT = '#F2FFFFFF'; $C_SUB = '#99FFFFFF'; $C_FAINT = '#55FFFFFF'
-$C_BG = '#F0161616'; $C_ACCENT = '#5AC8FA'
+$C_BG = '#EE12151B'; $C_ACCENT = '#5AC8FA'
 $MONO = 'Consolas, 9.5'
 function Brush($hex) {
   if (-not $script:bc) { $script:bc = New-Object System.Windows.Media.BrushConverter }
@@ -182,10 +182,10 @@ $xamlText = @'
       <MenuItem x:Name="MenuOld"     Header="检测到旧插件悬浮窗在运行,建议退出它" IsEnabled="False" Visibility="Collapsed"/>
     </ContextMenu>
   </Window.ContextMenu>
-  <StackPanel Margin="20,8,0,8" HorizontalAlignment="Right">
-    <!-- 平时态:嵌入 ZCode 右缘的侧栏条(右缘贴边直角,底色=ZCode 输入框 #2B2B2B) -->
-    <Border x:Name="Root" Width="64" CornerRadius="0" Background="#FF2B2B2B"
-            Padding="6,8,7,8" Cursor="Hand">
+  <StackPanel Margin="20,8,4,8" HorizontalAlignment="Right">
+    <!-- 平时态胶囊 -->
+    <Border x:Name="Root" Width="64" CornerRadius="20" Background="#EE12151B"
+            BorderBrush="#1FFFFFFF" BorderThickness="1" Padding="6,8,6,8" Cursor="Hand">
       <StackPanel x:Name="NormalPanel">
         <StackPanel x:Name="Ring5h" Tag="5h" />
         <StackPanel x:Name="RingWeekly" Tag="weekly" />
@@ -196,14 +196,14 @@ $xamlText = @'
         <Grid x:Name="BellRow" Height="34" />
       </StackPanel>
     </Border>
-    <!-- 把手态(收起后):细竖条,贴右缘 -->
-    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="3,0,0,3" Background="#CC2B2B2B"
-            HorizontalAlignment="Right" Visibility="Collapsed" Cursor="Hand">
+    <!-- 把手态(收起后):细竖条 -->
+    <Border x:Name="HandleRoot" Width="10" Height="76" CornerRadius="5" Background="#CC1B1F27"
+            BorderBrush="#1FFFFFFF" BorderThickness="1" Visibility="Collapsed" Cursor="Hand">
       <TextBlock Text="⟨" FontSize="11" Foreground="#99FFFFFF" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
     <!-- 设置小点:平时 10px 圆点,悬停展开为齿轮 -->
     <Border x:Name="GearDot" Width="10" Height="10" CornerRadius="5" Background="#66FFFFFF"
-            HorizontalAlignment="Right" Margin="0,10,0,0" Cursor="Hand" ToolTip="码管家设置">
+            HorizontalAlignment="Center" Margin="0,10,8,0" Cursor="Hand" ToolTip="码管家设置">
       <TextBlock x:Name="GearIcon" Text="" FontSize="11" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center"/>
     </Border>
   </StackPanel>
@@ -365,7 +365,7 @@ $bellBadge.Child = $bellBadgeText
 $bubble = New-Object System.Windows.Controls.Primitives.Popup
 $bubble.Placement = 'Left'; $bubble.StaysOpen = $true; $bubble.AllowsTransparency = $true
 $bubbleRoot = New-Object System.Windows.Controls.Border
-$bubbleRoot.Background = Brush '#F21A1A1A'; $bubbleRoot.CornerRadius = '10'
+$bubbleRoot.Background = Brush '#F212151B'; $bubbleRoot.CornerRadius = '10'
 $bubbleRoot.BorderBrush = Brush '#22FFFFFF'; $bubbleRoot.BorderThickness = '1'
 $bubbleRoot.Padding = '12,10,14,10'; $bubbleRoot.MaxWidth = 260
 $bubbleStack = New-Object System.Windows.Controls.StackPanel
@@ -373,7 +373,7 @@ $bubbleRoot.Child = $bubbleStack
 $bubbleGrid = New-Object System.Windows.Controls.Grid
 [void]$bubbleGrid.Children.Add($bubbleRoot)
 $bubbleArrow = New-Object System.Windows.Controls.TextBlock
-$bubbleArrow.Text = '▸'; $bubbleArrow.FontSize = 12; $bubbleArrow.Foreground = Brush '#F21A1A1A'
+$bubbleArrow.Text = '▸'; $bubbleArrow.FontSize = 12; $bubbleArrow.Foreground = Brush '#F212151B'
 $bubbleArrow.VerticalAlignment = 'Center'; $bubbleArrow.HorizontalAlignment = 'Right'
 $bubbleArrow.Margin = '0,0,-2,0'
 [void]$bubbleGrid.Children.Add($bubbleArrow)
@@ -475,7 +475,7 @@ $newsPanel = New-Object System.Windows.Controls.Primitives.Popup
 $newsPanel.Placement = 'Left'; $newsPanel.VerticalOffset = -180
 $newsPanel.StaysOpen = $false; $newsPanel.AllowsTransparency = $true
 $newsRoot = New-Object System.Windows.Controls.Border
-$newsRoot.Background = Brush '#F51C1C1C'; $newsRoot.CornerRadius = '12'
+$newsRoot.Background = Brush '#F5141720'; $newsRoot.CornerRadius = '12'
 $newsRoot.BorderBrush = Brush '#22FFFFFF'; $newsRoot.BorderThickness = '1'
 $newsRoot.Width = 300; $newsRoot.Padding = '14,12,14,12'
 $newsStack = New-Object System.Windows.Controls.StackPanel
@@ -564,7 +564,7 @@ $gearPanel = New-Object System.Windows.Controls.Primitives.Popup
 $gearPanel.Placement = 'Left'; $gearPanel.VerticalOffset = -260
 $gearPanel.StaysOpen = $false; $gearPanel.AllowsTransparency = $true
 $gearRoot = New-Object System.Windows.Controls.Border
-$gearRoot.Background = Brush '#F51C1C1C'; $gearRoot.CornerRadius = '12'
+$gearRoot.Background = Brush '#F5141720'; $gearRoot.CornerRadius = '12'
 $gearRoot.BorderBrush = Brush '#22FFFFFF'; $gearRoot.BorderThickness = '1'
 $gearRoot.Width = 320; $gearRoot.Padding = '14,12,14,12'
 $gearStack = New-Object System.Windows.Controls.StackPanel
@@ -973,8 +973,7 @@ function Position-Follow {
     if (($wr.Right - $wr.Left) -gt 0) { $wphys = $wr.Right - $wr.Left }
   }
   if ($null -eq $script:followOffsetY) { $script:followOffsetY = 40 }
-  # 嵌入贴边:悬浮窗右缘与 ZCode 右缘重合(侧栏条形态,不外凸)
-  $x = $r.Right - $wphys
+  $x = $r.Right - $wphys + 25
   $y = $r.Top + [int]$script:followOffsetY
   Move-WidgetPhysical $x $y
 }
