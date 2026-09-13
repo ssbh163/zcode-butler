@@ -468,6 +468,14 @@
     butlerSetRing('key', top ? top.pct : null, !!top);
   }
   if (window.chrome && window.chrome.webview) {
+    /* 窗口化 WebView2 无真透明(WebView2Feedback #915:opacity 不支持;透明像素被摊到白底),
+       外形已由宿主 SetWindowRgn 裁剪——页面只需把形状内部涂满不透明面板黑,
+       边缘抗锯齿与气泡绽开环就不再泛白 */
+    document.body.style.background = '#030303';
+    /* WebView2 窗口化对 CSS transition 合成层有动画期渲染缺陷:气泡绽开动画期间整层变白
+       (浏览器同代码正常;静态强制态复测全黑,判定为动画期缺陷,2026-09-13)。
+       宿主模式禁过渡,弧线↔气泡改为瞬时切换,换取零白闪 */
+    document.querySelectorAll('.fab .disc, .fab .arc, .fab .gear-g').forEach(function (el) { el.style.transition = 'none'; });
     window.chrome.webview.addEventListener('message', function (e) {
       try {
         var msg = e.data;
@@ -523,7 +531,10 @@
           type: 'shape', dpr: (window.devicePixelRatio || 1),
           capsule: caps, band: band, caps: arcCaps, bandR: bandR, fabC: fabC, fabR: fabR,
           dbgPanelBox: [pb.left, pb.top, pb.right, pb.bottom],
-          dbgArcBox: ab ? [ab.left, ab.top, ab.right, ab.bottom] : null
+          dbgArcBox: ab ? [ab.left, ab.top, ab.right, ab.bottom] : null,
+          dbgBodyBg: getComputedStyle(document.body).backgroundColor,
+          dbgDiscFill: (function () { try { return getComputedStyle(document.querySelector('.fab .disc circle')).fill; } catch (e) { return 'n/a'; } })(),
+          dbgHit: (function () { try { return getComputedStyle(document.querySelector('.fab-hit')).backgroundColor; } catch (e) { return 'n/a'; } })()
         }));
       } catch (err) { }
     }

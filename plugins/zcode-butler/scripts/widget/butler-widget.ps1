@@ -211,7 +211,8 @@ $wv2.Add_CoreWebView2InitializationCompleted({
           WLog ('shape capsule=' + $script:shapeCapsule.Count + ' dpr=' + $script:pageDpr +
             ' bandBox=[' + [int]$bx0 + ',' + [int]$by0 + ']-[' + [int]$bx1 + ',' + [int]$by1 + ']' +
             ' panelBox=' + (($o.dbgPanelBox | ForEach-Object { [Math]::Round([double]$_ * $script:pageDpr) }) -join ',') +
-            ' arcBox=' + ($(if ($o.dbgArcBox) { ($o.dbgArcBox | ForEach-Object { [Math]::Round([double]$_ * $script:pageDpr) }) -join ',' } else { 'null' })))
+            ' arcBox=' + ($(if ($o.dbgArcBox) { ($o.dbgArcBox | ForEach-Object { [Math]::Round([double]$_ * $script:pageDpr) }) -join ',' } else { 'null' })) +
+            ' bodyBg=' + $o.dbgBodyBg + ' discFill=' + $o.dbgDiscFill + ' hit=' + $o.dbgHit)
         } catch { WLog ('shape THREW: ' + $_.Exception.Message) }
       }
       elseif ($msg -like '*fabenter*') { $fabCloseTimer.Stop(); Set-WidgetRegion 'open' }
@@ -238,11 +239,12 @@ $wv2.Add_CoreWebView2InitializationCompleted({
   })
 })
 
-# 隐式初始化:设 Source 即自动建环境并加载页面(不碰 GetAwaiter)
+# 隐式初始化:设 Source 即自动建环境并加载页面(实测可靠;pre-Show 时机裸调 EnsureCoreWebView2Async 会挂起)。
+# file:// 会被 WebView2 磁盘缓存(改版后仍跑旧页的实测事故)→ 每次复制到随机临时路径加载,正本唯一
+$script:pageFile = Join-Path $env:TEMP ('butler-widget-page-{0}.html' -f [Guid]::NewGuid().ToString('N'))
+try { Copy-Item -LiteralPath $htmlFile -Destination $script:pageFile -Force } catch { $script:pageFile = $htmlFile }
 WLog ('before Source: props=' + $(if ($wv2.CreationProperties) { $wv2.CreationProperties.UserDataFolder } else { 'NULL' }))
-$wv2.Source = [Uri]('file:///' + ($htmlFile -replace '\\', '/'))
-WLog ('Source set: ' + $wv2.Source)
-
+$wv2.Source = [Uri]('file:///' + ($script:pageFile -replace '\\', '/'))
 # =====================================================================
 # 数据链:node status.mjs --json(异步进程 + 临时文件 + UTF8 + 完整性校验)
 # =====================================================================
@@ -561,6 +563,7 @@ $win.Add_Closing({
     if ($script:helper) { [void][ButlerNative.Win]::UnregisterHotKey($script:helper.Handle, 0xB001) }
     foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
     if ($script:nodeProc -and -not $script:nodeProc.HasExited) { try { $script:nodeProc.Kill() } catch { } }
+    if ($script:pageFile -and (Test-Path $script:pageFile)) { try { Remove-Item -LiteralPath $script:pageFile -ErrorAction SilentlyContinue } catch { } }
     $mutex.ReleaseMutex() | Out-Null
   } catch { }
 })
