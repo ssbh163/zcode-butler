@@ -9,3 +9,10 @@
 Thumbs.db
 .DS_Store
 desktop.ini
+
+# 私人技术文档(渲染之路复盘,不入库)
+docs/悬浮窗渲染之路.md
+
+# 视觉伴侣/浏览器测试临时产物
+.playwright-mcp/
+"OpenDesign UI/"
