@@ -1,16 +1,16 @@
 ﻿#!/usr/bin/env powershell
 # =====================================================================
-# 码管家桌面悬浮窗(PowerShell 5.1+ / WPF 窗口 + WebView2 渲染)
-# 视觉层 = butler-widget.html(用户定稿 UI 的数据驱动版,浏览器引擎 1:1 渲染)
-# 数据链:node status.mjs --json → CoreWebView2.PostWebMessageAsJson → 页面 butlerApply
-# 壳职责(文档 §7):无边框透明置顶窗口 / WinEvent 跟随 ZCode 右缘 / 热键 Ctrl+Shift+G /
-#   单实例互斥 + wake 双通道 / node 拉数 / 自存活;一切绘图归 HTML
-# 依赖:vendored webview2/(仅 LoadFrom 两个托管 DLL;原生 loader 靠 PATH 前置解析)
-#   + 系统 WebView2 Runtime(Win10/11 常带;缺→mshta 提示安装并退出)
-# 窗口形状:SetWindowRgn(面板轮廓 ∪ fab 圆)——AllowsTransparency 分层窗口对 HwndHost
-#   不生效(月牙刷白+命中异常,实测),区域外 OS 直接不渲染,天然透出桌面且可点击穿透
-# 教训规避(DEV RECORD 2026-09-12):原生 DLL 禁喂 LoadFrom(BadImageFormat 终止);
-#   UI 线程禁 GetAwaiter().GetResult()(Dispatcher 死锁)→ 一律事件回调 + $wv2.Source 隐式初始化
+# 码管家桌面悬浮窗 v0.3.0(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# 视觉层 = butler-widget.html(用户定稿 UI,CoreWebView2CompositionController
+#   渲染进 DComp 视觉树,逐像素真透明——边缘 AA/过渡动画/任意背景全部保真)
+# 壳职责:原生 Win32 窗口(WS_EX_NOREDIRECTIONBITMAP) / DComp 树 / 输入转发 /
+#   WM_NCHITTEST 形状掩码穿透 / WinEvent 跟随 ZCode 右缘 / 热键 Ctrl+Shift+G /
+#   单实例互斥 + wake 双通道 / node 拉数;PS 侧只做编排
+# 依赖:vendored webview2/(Core+Wpf 托管 DLL LoadFrom;原生 loader 走 PATH 前置)
+#   + 系统 WebView2 Runtime(缺→mshta 提示并退出)
+# v0.2.x 教训规避(DEV RECORD):窗口化无 alpha/rgn 硬边;WPF 分层窗口连
+#   WebView2(含官方合成控件)都无法初始化;New-Object 解析不到 LoadFrom 程序集
+#   的合成控件(须 Activator)——故本版绕开 WPF 窗口与控件,手搓合成链路
 # =====================================================================
 param(
   [switch]$NoShowIfExists
@@ -18,7 +18,7 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
-# ---- 单实例互斥量 + 唤醒通道(必须先于 Add-Type 等耗时初始化) ----
+# ---- 单实例互斥量 + 唤醒通道(必须先于耗时初始化) ----
 $mutex = New-Object System.Threading.Mutex($false, 'Global\ZCode-Butler-Widget')
 $ownsMutex = $false
 try { $ownsMutex = $mutex.WaitOne(0) } catch { $ownsMutex = $true }
@@ -54,8 +54,8 @@ try {
   }
 } catch { }
 
-# ---- Win32(P/Invoke 一次声明;热键/DPI/枚窗/跟随) ----
-Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+# ---- 依赖装载与 DPI ----
+Add-Type -AssemblyName WindowsBase, System.Drawing
 Add-Type -Namespace ButlerNative -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
@@ -69,182 +69,376 @@ public delegate void WinEventProc(IntPtr hHook, uint evt, IntPtr hwnd, int idObj
 [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hHook);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
 [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
-[DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr h);
 '@
-# 跨回调状态:$script: 在 WinEvent delegate 里会丢(实测),置脏走 .NET 静态字段
+# 跨回调状态:WinEvent delegate 里 $script: 会丢(实测),置脏走 .NET 静态字段
 Add-Type -TypeDefinition 'public static class ButlerState { public static volatile int FollowDirty; }'
-# GDI 区域:窗口形状 = 面板轮廓多边形 ∪ fab 圆(替代不生效的分层窗口透明)
-# 注意:裸 -TypeDefinition 不自动带 using(MemberDefinition 才带),Interop 特性必须自己引
-Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-public static class ButlerGdi {
-  [StructLayout(LayoutKind.Sequential)] public struct PT { public int X, Y; }
-  [DllImport("gdi32.dll")] public static extern IntPtr CreatePolygonRgn(PT[] pts, int n, int mode);
-  [DllImport("gdi32.dll")] public static extern IntPtr CreateEllipticRgn(int x1, int y1, int x2, int y2);
-  [DllImport("gdi32.dll")] public static extern IntPtr CreateRectRgn(int x1, int y1, int x2, int y2);
-  [DllImport("gdi32.dll")] public static extern int CombineRgn(IntPtr dst, IntPtr a, IntPtr b, int mode);
-  [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr o);
-  [DllImport("user32.dll")] public static extern int SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
-}
-'@
-WLog ('gdi type loaded=' + ([bool]([System.Management.Automation.PSTypeName]'ButlerGdi').Type))
-# 面板轮廓(舞台坐标):运行时从 HTML 提取 outline 数组——单一正本,不在壳里复制形状数据
-$script:outlinePts = @()
-try {
-  $htmlRaw = Get-Content $htmlFile -Raw -Encoding UTF8
-  # 注意锚到 "];"(数组真结束):内层成对坐标自带 "]" ,非贪婪若只到 "]" 会在第一对就截断
-  $m = [regex]::Match($htmlRaw, 'var\s+outline\s*=\s*\[(.*?)\];', [System.Text.RegularExpressions.RegexOptions]::Singleline)
-  if ($m.Success) {
-    $nums = [regex]::Matches($m.Groups[1].Value, '\d+(?:\.\d+)?')
-    for ($i = 0; $i -lt $nums.Count - 1; $i += 2) {
-      $script:outlinePts += , @([double]$nums[$i].Value, [double]$nums[$i + 1].Value)
-    }
-  }
-} catch { }
-WLog ('outline pts=' + $script:outlinePts.Count)
-# 页面实测形状(shape 消息):轮廓/弧带/端帽/fab 圆心的视口坐标 + dpr。
-# 宿主只做 ×dpr,不再自己推算——DIP×DPI 推算与真实渲染有 ~3px 偏差(白边事故)
-$script:pageDpr = 0
-$script:shapeCapsule = $null
-$script:shapeBand = $null
-$script:shapeCaps = $null
-$script:shapeBandR = 0
-$script:shapeFabC = $null
-$script:shapeFabR = 0
-# PerMonitorV2(句柄 -4):跟随定位走物理像素,WPF 窗口必须同样按物理 DPI 对齐(M2 已验证)
+# PerMonitorV2(句柄 -4):全链物理像素对齐(M2 已验证)
 [void][ButlerNative.Win]::SetProcessDpiAwarenessContext([IntPtr](-4))
 
-$EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
-$WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
-
-# ---- 窗口尺寸(HTML 舞台 430×2025,面板带宽 219.2→430 ≈ 211;悬浮窗按高定 k) ----
-$script:stageH = 600.0                       # DIP;物理(175%)≈1050,占主屏高 49%(2026-09-13 用户要求改小)
-$script:winH = [int]$script:stageH
-$script:winW = [int][Math]::Ceiling(211.0 * ($script:stageH / 2025.0) + 1.5)   # ≈ 83
-
-$win = New-Object System.Windows.Window
-$win.Title = '码管家'
-$win.Topmost = $true
-$win.WindowStyle = [System.Windows.WindowStyle]::None
-# 禁用 AllowsTransparency:WPF 分层窗口对 WebView2(HwndHost 子窗口)不参与透明合成——
-# 月牙空隙刷成白底、鼠标命中异常(2026-09-13 实测);改普通窗口 + SetWindowRgn 裁出面板形状
-$win.AllowsTransparency = $false
-$win.Background = [System.Windows.Media.Brushes]::Black
-$win.ShowInTaskbar = $false
-$win.ResizeMode = [System.Windows.ResizeMode]::NoResize
-$win.ShowActivated = $false
-$win.Width = $script:winW
-$win.Height = $script:winH
-$win.WindowStartupLocation = [System.Windows.WindowStartupLocation]::Manual
-
-# ---- WebView2:vendored 托管程序集 ----
 $wv2Dir = Join-Path $PSScriptRoot 'webview2'
-# 原生 WebView2Loader.dll 由 LoadLibrary 经 PATH 解析(.NET Framework 不探测 LoadFrom 程序集所在目录)
+# 原生 WebView2Loader.dll 由 LoadLibrary 经 PATH 解析(.NET Framework 不探测 LoadFrom 程序集目录)
 $env:PATH = $wv2Dir + ';' + $env:PATH
-foreach ($dll in @('Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.Wpf.dll')) {
-  $dllPath = Join-Path $wv2Dir $dll
-  if (Test-Path $dllPath) { [void][System.Reflection.Assembly]::LoadFrom($dllPath) }
-  else { WLog ('MISSING ' + $dll) }
+$asmCore = [System.Reflection.Assembly]::LoadFrom((Join-Path $wv2Dir 'Microsoft.Web.WebView2.Core.dll'))
+[void][System.Reflection.Assembly]::LoadFrom((Join-Path $wv2Dir 'Microsoft.Web.WebView2.Wpf.dll'))
+
+# =====================================================================
+# 内联 C# 合成宿主:原生窗口 + DComp + CoreWebView2CompositionController
+# (官方 WPF 合成控件在 PS 宿主三种窗口模型均无法初始化,实测;故手搓整条链路)
+# =====================================================================
+Add-Type -TypeDefinition @'
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+using System.Threading.Tasks;
+using System.Windows.Threading;
+using Microsoft.Web.WebView2.Core;
+
+public static class ButlerHost {
+  private static IntPtr _hwnd;
+  private static WndProcDelegate _proc;
+  private static IDCompositionDevice _device;
+  private static IDCompositionTarget _target;
+  private static IDCompositionVisual _visual;
+  private static CoreWebView2CompositionController _controller;
+  private static Dispatcher _dispatcher;
+  private static bool _trackingMouse;
+  private static int[] _maskX, _maskY;
+  private static int _maskN;
+  private static int _fabX, _fabY, _fabR;
+
+  public static Action<string> OnMessage;
+  public static Action OnHotKey;
+  public static Action<string> Log = delegate { };
+
+  private const uint WM_DESTROY = 2, WM_SIZE = 5, WM_ERASEBKGND = 0x14,
+    WM_SETCURSOR = 0x20, WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202,
+    WM_LBUTTONDBLCLK = 0x203, WM_RBUTTONDOWN = 0x204, WM_RBUTTONUP = 0x205,
+    WM_RBUTTONDBLCLK = 0x206, WM_MBUTTONDOWN = 0x207, WM_MBUTTONUP = 0x208,
+    WM_MBUTTONDBLCLK = 0x209, WM_MOUSEWHEEL = 0x20A, WM_XBUTTONUP = 0x20C,
+    WM_MOUSEHWHEEL = 0x20E, WM_MOUSELEAVE = 0x2A3, WM_NCLBUTTONDOWN = 0xA1,
+    WM_NCHITTEST = 0x84, WM_HOTKEY = 0x312;
+  private const int HTCLIENT = 1, HTCAPTION = 2, HTTRANSPARENT = -1;
+
+  [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+  private delegate IntPtr WndProcDelegate(IntPtr h, uint m, IntPtr w, IntPtr l);
+
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  private static extern ushort RegisterClassEx(ref WNDCLASSEX c);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+  private static extern IntPtr CreateWindowEx(int ex, string cls, string name, int style, int x, int y, int w, int h, IntPtr parent, IntPtr menu, IntPtr inst, IntPtr param);
+  [DllImport("user32.dll")] private static extern IntPtr DefWindowProc(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll", CharSet = CharSet.Unicode)] private static extern bool SetWindowText(IntPtr h, string t);
+  [DllImport("user32.dll")] private static extern void PostQuitMessage(int code);
+  [DllImport("user32.dll")] private static extern bool ShowWindow(IntPtr h, int cmd);
+  [DllImport("user32.dll")] private static extern bool IsWindowVisible(IntPtr h);
+  [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
+  [DllImport("user32.dll")] private static extern bool TrackMouseEvent(ref TRACKMOUSEEVENT t);
+  [DllImport("user32.dll")] private static extern IntPtr SetCursor(IntPtr c);
+  [DllImport("user32.dll")] private static extern bool ReleaseCapture();
+  [DllImport("user32.dll")] private static extern IntPtr SendMessage(IntPtr h, uint m, IntPtr w, IntPtr l);
+  [DllImport("user32.dll")] private static extern short GetKeyState(int vk);
+  [DllImport("user32.dll")] private static extern bool ScreenToClient(IntPtr h, ref POINT p);
+  [DllImport("kernel32.dll")] private static extern IntPtr GetModuleHandleW(string name);
+  [DllImport("dcomp.dll")] private static extern int DCompositionCreateDevice(IntPtr dxgi, Guid iid, out IntPtr dev);
+  [DllImport("user32.dll")] private static extern bool PeekMessage(out MSG m, IntPtr h, uint a, uint b, uint remove);
+  [DllImport("user32.dll")] private static extern bool TranslateMessage(ref MSG m);
+  [DllImport("user32.dll")] private static extern IntPtr DispatchMessage(ref MSG m);
+
+  [StructLayout(LayoutKind.Sequential)]
+  private struct MSG { public IntPtr hwnd; public uint message; public IntPtr wParam, lParam; public uint time; public int ptX, ptY; }
+
+  // 泵消息等待:控制器创建会向宿主窗口 SendMessage,裸 .Result 不泵即死锁(实测)
+  private static T PumpWait<T>(Task<T> t) {
+    while (!t.IsCompleted) {
+      MSG m;
+      while (PeekMessage(out m, IntPtr.Zero, 0, 0, 1 /*PM_REMOVE*/)) { TranslateMessage(ref m); DispatchMessage(ref m); }
+      System.Threading.Thread.Sleep(15);
+    }
+    return t.Result;
+  }
+
+  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+  private struct WNDCLASSEX {
+    public int cbSize; public uint style; public WndProcDelegate lpfnWndProc;
+    public int cbClsExtra, cbWndExtra; public IntPtr hInstance, hIcon, hCursor, hbrBackground;
+    public string lpszMenuName, lpszClassName; public IntPtr hIconSm;
+  }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct TRACKMOUSEEVENT { public int cbSize; public uint dwFlags; public IntPtr hwndTrack; public uint dwHoverTime; }
+  [StructLayout(LayoutKind.Sequential)]
+  private struct POINT { public int X, Y; }
+
+  // DComp COM 声明:GUID 取自 dcomp.h;Visual 只作指针传递(WebView2 自己填内容)
+  [ComImport, Guid("C37EA93A-E7AA-450D-B16F-9746CB0407F3"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IDCompositionDevice {
+    void Commit();
+    void WaitForCommitCompletion();
+    void GetFrameStatistics(IntPtr stats);
+    void CreateTargetForHwnd(IntPtr hwnd, bool topmost, out IDCompositionTarget target);
+    void CreateVisual(out IDCompositionVisual visual);
+  }
+  [ComImport, Guid("eacdd04c-117e-4e17-88f4-d1b12b0e3d89"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IDCompositionTarget { void SetRoot(IDCompositionVisual visual); }
+  [ComImport, Guid("4d93059d-097b-4651-9a60-f0f25116e2f3"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  private interface IDCompositionVisual { }
+
+  public static IntPtr Handle { get { return _hwnd; } }
+  public static bool Ready { get { return _controller != null; } }
+  public static bool Visible { get { return IsWindowVisible(_hwnd); } }
+
+  public static void Init(int x, int y, int w, int h, string udf, string url) {
+    // 注意:Dispatcher.CurrentDispatcher 会给线程装 WPF 同步上下文,导致下面同步
+    // .Result 链的死锁(续体排队到未启动的 Dispatcher,实测)——Dispatcher 延后获取
+
+    var wc = new WNDCLASSEX();
+    wc.cbSize = Marshal.SizeOf(typeof(WNDCLASSEX));
+    wc.style = 0;
+    wc.lpfnWndProc = _proc = WndProcImpl;
+    wc.hInstance = GetModuleHandleW(null);
+    wc.hCursor = IntPtr.Zero;
+    wc.hbrBackground = IntPtr.Zero;
+    wc.lpszClassName = "ButlerWidgetWnd";
+    RegisterClassEx(ref wc);
+    int WS_POPUP = unchecked((int)0x80000000);
+    int ex = 0x00200000 /*WS_EX_NOREDIRECTIONBITMAP:真透明的关键,去掉重定向位图*/
+           | 0x00000080 /*WS_EX_TOOLWINDOW:不进任务栏/Alt-Tab*/
+           | 0x00000008 /*WS_EX_TOPMOST*/
+           | 0x08000000; /*WS_EX_NOACTIVATE:不抢焦点,输入走合成转发*/
+    _hwnd = CreateWindowEx(ex, "ButlerWidgetWnd", "ButlerWidget", WS_POPUP, x, y, w, h, IntPtr.Zero, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
+    SetWindowText(_hwnd, "ButlerWidget");
+    Log("hwnd=0x" + _hwnd.ToString("X") + " size=" + w + "x" + h);
+    if (_hwnd == IntPtr.Zero) { Fail("窗口创建失败"); return; }
+
+    IntPtr devPtr;
+    int hr = DCompositionCreateDevice(IntPtr.Zero, typeof(IDCompositionDevice).GUID, out devPtr);
+    if (hr != 0 || devPtr == IntPtr.Zero) { Fail("DCompositionCreateDevice hr=0x" + hr.ToString("X8")); return; }
+    _device = (IDCompositionDevice)Marshal.GetObjectForIUnknown(devPtr);
+    _device.CreateTargetForHwnd(_hwnd, true, out _target);
+    _device.CreateVisual(out _visual);
+    _target.SetRoot(_visual);
+    _device.Commit();
+    Log("dcomp ok");
+
+    // 同步创建链(PS 线程无 SyncContext,.Result 安全;异步 ContinueWith 链实测会莫
+    // 名卡在 Raw 接口 QI,与同步探针行为不一致,原因未深究——启动阻塞 1~2s 可接受)
+    try {
+      var env = PumpWait(CoreWebView2Environment.CreateAsync(null, udf, null));
+      _controller = PumpWait(env.CreateCoreWebView2CompositionControllerAsync(_hwnd));
+      _controller.RootVisualTarget = _visual;
+      // 官方语义:put_RootVisualTarget 后必须再 Commit 一次 DComp 设备,内容才会上屏(实测缺它=纯透明)
+      _device.Commit();
+      _controller.Bounds = new Rectangle(0, 0, w, h);
+      _controller.IsVisible = true;
+      _controller.NotifyParentWindowPositionChanged();
+      _controller.DefaultBackgroundColor = Color.Transparent;   // 逐像素真透明
+      _controller.CursorChanged += delegate { };                // 光标经 WM_SETCURSOR 轮询 Cursor 属性
+      var core = _controller.CoreWebView2;
+      core.WebMessageReceived += (s, e) => {
+        try {
+          var msg = e.TryGetWebMessageAsString();
+          Log("wmsg: " + (msg == null ? "null" : (msg.Length > 60 ? msg.Substring(0, 60) : msg)));
+          if (OnMessage != null) _dispatcher.InvokeAsync(() => OnMessage(msg));
+        } catch { }
+      };
+      core.Navigate(url);
+      core.NavigationCompleted += (s, e) => Log("nav " + (e.IsSuccess ? "ok" : "FAIL " + e.WebErrorStatus));
+      _dispatcher = Dispatcher.FromThread(System.Threading.Thread.CurrentThread);
+      if (_dispatcher == null) _dispatcher = Dispatcher.CurrentDispatcher;
+      Log("composition controller ready");
+    } catch (Exception e2) {
+      var e1 = e2; while (e1.InnerException != null) e1 = e1.InnerException;
+      Fail("setup: " + e1.Message);
+    }
+  }
+
+  private static void Fail(string why) {
+    Log("FATAL " + why);
+    try {
+      // C# 源经 CodeDom 临时文件编译,非 ASCII 字面量会被按 ANSI 误读(实测标题乱码事故)——仅英文
+      System.Diagnostics.Process.Start("mshta",
+        "vbscript:MsgBox(\"Butler widget init failed: " + why.Replace('"', ' ').Replace("\r", " ").Replace("\n", " ") +
+        " (WebView2 Runtime required: developer.microsoft.com/microsoft-edge/webview2/)\",48,\"Butler\")(window.close)");
+    } catch { }
+    Environment.Exit(1);
+  }
+
+  public static void Show() { ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
+  public static void Hide() { ShowWindow(_hwnd, 0); }
+  public static void MoveTo(int x, int y) { SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015); }
+  public static void Destroy() { if (_hwnd != IntPtr.Zero) { DestroyWindowQuiet(); } }
+  private static void DestroyWindowQuiet() { try { SendMessage(_hwnd, 0x0012 /*WM_CLOSE*/, IntPtr.Zero, IntPtr.Zero); } catch { } }
+  public static void DragMove() { ReleaseCapture(); SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero); }
+  public static void PostJson(string json) {
+    var c = _controller;
+    if (c != null && c.CoreWebView2 != null) { try { c.CoreWebView2.PostWebMessageAsJson(json); } catch { } }
+  }
+  public static void SetHitMask(int[] xs, int[] ys, int n, int fx, int fy, int fr) {
+    _maskX = xs; _maskY = ys; _maskN = n; _fabX = fx; _fabY = fy; _fabR = fr;
+    Log("mask pts=" + n + " fab=(" + fx + "," + fy + " r" + fr + ")");
+  }
+
+  private static bool MaskHit(int screenX, int screenY) {
+    var p = new POINT { X = screenX, Y = screenY };
+    ScreenToClient(_hwnd, ref p);
+    if (_fabR > 0) {
+      long dx = p.X - _fabX, dy = p.Y - _fabY;
+      if (dx * dx + dy * dy <= (long)_fabR * _fabR) return true;
+    }
+    if (_maskN < 3) return false;   // 形状未到:整窗穿透,绝不挡 ZCode
+    bool inside = false;
+    for (int i = 0, j = _maskN - 1; i < _maskN; j = i++) {
+      if (((_maskY[i] > p.Y) != (_maskY[j] > p.Y)) &&
+          (p.X < (_maskX[j] - _maskX[i]) * (p.Y - _maskY[i]) / (_maskY[j] - _maskY[i]) + _maskX[i])) inside = !inside;
+    }
+    return inside;
+  }
+
+  private static void ForwardMouse(uint msg, IntPtr wp, IntPtr lp) {
+    var c = _controller;
+    if (c == null) return;
+    if (msg == WM_MOUSEMOVE && !_trackingMouse) {
+      var tme = new TRACKMOUSEEVENT { cbSize = Marshal.SizeOf(typeof(TRACKMOUSEEVENT)), dwFlags = 2 /*TME_LEAVE*/, hwndTrack = _hwnd };
+      TrackMouseEvent(ref tme); _trackingMouse = true;
+    }
+    var pt = new Point((short)((int)lp & 0xFFFF), (short)(((int)lp >> 16) & 0xFFFF));
+    if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) {   // 滚轮 lParam 是屏幕坐标
+      var sp = new POINT { X = pt.X, Y = pt.Y }; ScreenToClient(_hwnd, ref sp); pt = new Point(sp.X, sp.Y);
+    }
+    uint keys = 0;
+    if ((GetKeyState(0x10) & 0x8000) != 0) keys |= 4;
+    if ((GetKeyState(0x11) & 0x8000) != 0) keys |= 8;
+    if (((long)wp & 1) != 0) keys |= 1;
+    if (((long)wp & 2) != 0) keys |= 2;
+    if (((long)wp & 16) != 0) keys |= 16;
+    uint data = 0;
+    if (msg == WM_MOUSEWHEEL || msg == WM_MOUSEHWHEEL) data = unchecked((uint)(short)(((long)wp >> 16) & 0xFFFF));
+    try { c.SendMouseInput((CoreWebView2MouseEventKind)msg, (CoreWebView2MouseEventVirtualKeys)keys, data, pt); } catch { }
+  }
+
+  private static IntPtr WndProcImpl(IntPtr h, uint msg, IntPtr wp, IntPtr lp) {
+    switch (msg) {
+      case WM_NCHITTEST: {
+        int sx = (short)((int)lp & 0xFFFF), sy = (short)(((int)lp >> 16) & 0xFFFF);
+        return (IntPtr)(MaskHit(sx, sy) ? HTCLIENT : HTTRANSPARENT);
+      }
+      case WM_MOUSEMOVE: case WM_LBUTTONDOWN: case WM_LBUTTONUP: case WM_LBUTTONDBLCLK:
+      case WM_RBUTTONDOWN: case WM_RBUTTONUP: case WM_RBUTTONDBLCLK:
+      case WM_MBUTTONDOWN: case WM_MBUTTONUP: case WM_MBUTTONDBLCLK:
+      case WM_XBUTTONUP: case WM_MOUSEWHEEL: case WM_MOUSEHWHEEL:
+        ForwardMouse(msg, wp, lp); return IntPtr.Zero;
+      case WM_MOUSELEAVE:
+        _trackingMouse = false;
+        if (_controller != null) { try { _controller.SendMouseInput((CoreWebView2MouseEventKind)675, 0, 0, new Point(0, 0)); } catch { } }
+        return IntPtr.Zero;
+      case WM_SETCURSOR:
+        if (_controller != null && _controller.Cursor != IntPtr.Zero && ((int)lp & 0xFFFF) == HTCLIENT) {
+          SetCursor(_controller.Cursor); return (IntPtr)1;
+        }
+        break;
+      case WM_HOTKEY: if (OnHotKey != null) OnHotKey(); return IntPtr.Zero;
+      case WM_SIZE:
+        if (_controller != null) {
+          try { _controller.Bounds = new Rectangle(0, 0, (short)((int)lp & 0xFFFF), (short)(((int)lp >> 16) & 0xFFFF)); } catch { }
+        }
+        return IntPtr.Zero;
+      case WM_ERASEBKGND: return (IntPtr)1;
+      case WM_DESTROY: PostQuitMessage(0); return IntPtr.Zero;
+    }
+    return DefWindowProc(h, msg, wp, lp);
+  }
 }
-$wv2 = New-Object Microsoft.Web.WebView2.Wpf.WebView2
-# 显式用户数据目录:默认目录跟随宿主 exe(powershell.exe 在 System32)不可写,初始化必失败
-$wv2Props = New-Object Microsoft.Web.WebView2.Wpf.CoreWebView2CreationProperties
-$wv2Props.UserDataFolder = Join-Path $dotZcode 'butler-widget-wv2'
-$wv2.CreationProperties = $wv2Props
-# 底色与面板同黑(#030303):rgn 外 OS 不渲染;rgn 内被页面面板无缝覆盖,
-# fab 圆域内弧线周围的页面透明区落在这层黑上(视觉即齿轮气泡底色)
-# 底色与面板同黑(#030303):rgn 外 OS 不渲染;rgn 内被页面面板无缝覆盖
-$wv2.DefaultBackgroundColor = [System.Windows.Media.Color]::FromArgb(0xFF, 0x03, 0x03, 0x03)
-$win.Content = $wv2
-$script:wv2 = $wv2
+'@ -ReferencedAssemblies @('System.dll', ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'System.Drawing' } | Select-Object -First 1).Location, ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'WindowsBase' } | Select-Object -First 1).Location, ($asmCore.Location))
+[ButlerHost]::Log = { param($s) WLog $s }
+
+# ---- 窗口尺寸(HTML 舞台 430×2025,面板带宽 ≈211;物理像素直建) ----
+$script:stageH = 600.0
+$dpiScale = 1.75   # 兜底值;实际以 GetDpiForWindow 后的首帧 GetWindowRect 为准由页面 shape 校正
+$script:winH = [int][Math]::Round($script:stageH * $dpiScale)          # ≈1050
+$script:winW = [int][Math]::Ceiling(211.0 * ($script:stageH / 2025.0) * $dpiScale + 2)   # ≈116
+
+# 页面加载:file:// 会被 WebView2 磁盘缓存(实测事故)→ 复制到随机临时路径,正本唯一
+$script:pageFile = Join-Path $env:TEMP ('butler-widget-page-{0}.html' -f [Guid]::NewGuid().ToString('N'))
+try { Copy-Item -LiteralPath $htmlFile -Destination $script:pageFile -Force } catch { $script:pageFile = $htmlFile }
+
+# 页面实测形状(shape 消息):胶囊视口坐标 + dpr → NCHITTEST 掩码
+$script:pageDpr = 0
+$script:shapeCapsule = $null
+$script:shapeFabC = $null
+$script:shapeFabR = 0
 $script:pageReady = $false
 
-# 数据推送(ready 前缓存,ready 后即投;此后每次刷新即投)
+# ---- 消息处理(页面 → 宿主) ----
 function Push-Data {
   if (-not $script:data) { return }
-  if (-not $script:wv2.CoreWebView2) { return }
+  if (-not [ButlerHost]::Ready) { return }
   if (-not $script:pageReady) { return }
   try {
     $json = $script:data | ConvertTo-Json -Depth 8 -Compress
-    $script:wv2.CoreWebView2.PostWebMessageAsJson(('{"type":"data","payload":' + $json + '}'))
+    [ButlerHost]::PostJson(('{"type":"data","payload":' + $json + '}'))
   } catch { WLog ('push THREW: ' + $_.Exception.Message) }
 }
 
-# 初始化完成(事件回调,禁 UI 线程同步等待)
-$wv2.Add_CoreWebView2InitializationCompleted({
-  # 参数名禁用 $args:它是自动变量,param 绑不上 → IsSuccess 恒空 → 误判失败退进程(实测事故)
-  param($sender, $e)
-  if (-not $e.IsSuccess) {
-    $ex = $e.InitializationException
-    WLog ('wv2 init FAILED: type=' + $(if ($ex) { $ex.GetType().FullName } else { 'null' }) +
-      ' msg=[' + $(if ($ex) { $ex.Message } else { '' }) + ']')
-    if ($ex) { WLog ($ex | Format-List * -Force | Out-String) }
-    # 非阻塞提示(mshta 分离进程):隐藏宿主里等不到用户点模态框的 OK,会永久占住互斥量
-    try {
-      Start-Process mshta 'vbscript:MsgBox("悬浮窗需要 WebView2 Runtime(Edge 内核,Win10/11 一般自带)。安装: developer.microsoft.com/microsoft-edge/webview2/ 装完重开 ZCode 会话即可。",48,"码管家")(window.close)'
-    } catch { }
-    [Environment]::Exit(1)
-  }
-  WLog 'CoreWebView2 ready'
-  $script:wv2.CoreWebView2.Add_WebMessageReceived({
-    param($s2, $m)
-    try {
-      $msg = $m.TryGetWebMessageAsString()
-      if ($msg -like '{"type":"shape"*') {
-        try {
-          $o = $msg | ConvertFrom-Json
-          $script:pageDpr = [double]$o.dpr
-          $script:shapeCapsule = @($o.capsule)
-          $script:shapeBand = @($o.band)
-          $script:shapeCaps = @($o.caps)
-          $script:shapeBandR = [double]$o.bandR
-          $script:shapeFabC = @($o.fabC)
-          $script:shapeFabR = [double]$o.fabR
-          Set-WidgetRegion 'base'
-          $bx0 = 1e9; $bx1 = -1e9; $by0 = 1e9; $by1 = -1e9
-          foreach ($bp in $script:shapeBand) {
-            $bx = [double]$bp[0] * $script:pageDpr; $by = [double]$bp[1] * $script:pageDpr
-            if ($bx -lt $bx0) { $bx0 = $bx }; if ($bx -gt $bx1) { $bx1 = $bx }
-            if ($by -lt $by0) { $by0 = $by }; if ($by -gt $by1) { $by1 = $by }
+[ButlerHost]::OnMessage = {
+  param($msg)
+  try {
+    if ($msg -like '{"type":"shape"*') {
+      try {
+        $o = $msg | ConvertFrom-Json
+        $script:pageDpr = [double]$o.dpr
+        $script:shapeCapsule = @($o.capsule)
+        $script:shapeFabC = @($o.fabC)
+        $script:shapeFabR = [double]$o.fabR
+        $dpr = $script:pageDpr
+        if ($dpr -le 0) { $dpr = 1.75 }
+        $cap = @($script:shapeCapsule)
+        $xs = [int[]]::new($cap.Count); $ys = [int[]]::new($cap.Count)
+        for ($i = 0; $i -lt $cap.Count; $i++) {
+          $xs[$i] = [int][Math]::Round([double]$cap[$i][0] * $dpr)
+          $ys[$i] = [int][Math]::Round([double]$cap[$i][1] * $dpr)
+        }
+        $fx = 0; $fy = 0; $fr = 0
+        if ($script:shapeFabC) {
+          $fx = [int][Math]::Round([double]$script:shapeFabC[0] * $dpr)
+          $fy = [int][Math]::Round([double]$script:shapeFabC[1] * $dpr)
+          $fr = [int][Math]::Round([double]$script:shapeFabR * $dpr)
+        }
+        [ButlerHost]::SetHitMask($xs, $ys, $cap.Count, $fx, $fy, $fr)
+      } catch { WLog ('shape THREW: ' + $_.Exception.Message) }
+    }
+    elseif ($msg -like '*ready*') { $script:pageReady = $true; Push-Data }
+    elseif ($msg -like '*drag*') {
+      try {
+        [ButlerHost]::DragMove()
+        if (([int64]$script:zcodeHwnd) -ne 0 -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) {
+          $zr = New-Object ButlerNative.Win+RECT
+          [ButlerNative.Win]::GetWindowRect($script:zcodeHwnd, [ref]$zr) | Out-Null
+          $wh = [ButlerHost]::Handle
+          if (([int64]$wh) -ne 0) {
+            $wr = New-Object ButlerNative.Win+RECT
+            [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
+            $script:followOffsetY = $wr.Top - $zr.Top
+            Save-Pos
           }
-          WLog ('shape capsule=' + $script:shapeCapsule.Count + ' dpr=' + $script:pageDpr +
-            ' bandBox=[' + [int]$bx0 + ',' + [int]$by0 + ']-[' + [int]$bx1 + ',' + [int]$by1 + ']' +
-            ' panelBox=' + (($o.dbgPanelBox | ForEach-Object { [Math]::Round([double]$_ * $script:pageDpr) }) -join ',') +
-            ' arcBox=' + ($(if ($o.dbgArcBox) { ($o.dbgArcBox | ForEach-Object { [Math]::Round([double]$_ * $script:pageDpr) }) -join ',' } else { 'null' })) +
-            ' bodyBg=' + $o.dbgBodyBg + ' discFill=' + $o.dbgDiscFill + ' hit=' + $o.dbgHit)
-        } catch { WLog ('shape THREW: ' + $_.Exception.Message) }
-      }
-      elseif ($msg -like '*fabenter*') { $fabCloseTimer.Stop(); Set-WidgetRegion 'open' }
-      elseif ($msg -like '*fableave*') { $fabCloseTimer.Stop(); $fabCloseTimer.Start() }
-      elseif ($msg -like '*ready*') { $script:pageReady = $true; Push-Data }
-      elseif ($msg -like '*drag*') {
-        try {
-          $win.DragMove()
-          # 拖动只是微调:折算回相对 ZCode 顶缘的 offsetY 并记忆(跟随模式下位置仍由宿主管)
-          if (([int64]$script:zcodeHwnd) -ne 0 -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) {
-            $zr = New-Object ButlerNative.Win+RECT
-            [ButlerNative.Win]::GetWindowRect($script:zcodeHwnd, [ref]$zr) | Out-Null
-            $wh = Get-WidgetHwnd
-            if (([int64]$wh) -ne 0) {
-              $wr = New-Object ButlerNative.Win+RECT
-              [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
-              $script:followOffsetY = $wr.Top - $zr.Top
-              Save-Pos
-            }
-          }
-        } catch { }
-      }
-    } catch { }
-  })
-})
+        }
+      } catch { }
+    }
+  } catch { }
+}
 
-# 隐式初始化:设 Source 即自动建环境并加载页面(实测可靠;pre-Show 时机裸调 EnsureCoreWebView2Async 会挂起)。
-# file:// 会被 WebView2 磁盘缓存(改版后仍跑旧页的实测事故)→ 每次复制到随机临时路径加载,正本唯一
-$script:pageFile = Join-Path $env:TEMP ('butler-widget-page-{0}.html' -f [Guid]::NewGuid().ToString('N'))
-try { Copy-Item -LiteralPath $htmlFile -Destination $script:pageFile -Force } catch { $script:pageFile = $htmlFile }
-WLog ('before Source: props=' + $(if ($wv2.CreationProperties) { $wv2.CreationProperties.UserDataFolder } else { 'NULL' }))
-$wv2.Source = [Uri]('file:///' + ($script:pageFile -replace '\\', '/'))
+[ButlerHost]::OnHotKey = {
+  if ([ButlerHost]::Visible) { [ButlerHost]::Hide() } else { [ButlerHost]::Show() }
+}
+
+# ---- 初始兜底位置(吸附成功时被 Position-Follow 覆盖):贴主屏右缘居中 ----
+$screenW = [ButlerNative.Win]::GetSystemMetrics(0)
+$screenH = [ButlerNative.Win]::GetSystemMetrics(1)
+$initX = $screenW - $script:winW
+$initY = [int](($screenH - $script:winH) / 2)
+
+WLog ('boot: init ' + $initX + ',' + $initY + ' ' + $script:winW + 'x' + $script:winH)
+[ButlerHost]::Init($initX, $initY, $script:winW, $script:winH, (Join-Path $dotZcode 'butler-widget-wv2'), ('file:///' + ($script:pageFile -replace '\\', '/')))
+[void][ButlerNative.Win]::RegisterHotKey([ButlerHost]::Handle, 0xB001, 0x6, 0x47)
+
 # =====================================================================
 # 数据链:node status.mjs --json(异步进程 + 临时文件 + UTF8 + 完整性校验)
 # =====================================================================
@@ -303,7 +497,7 @@ $refreshTimer.Add_Tick({ Invoke-Refresh })
 $refreshTimer.Start()
 
 # =====================================================================
-# 窗口跟随 ZCode 右缘(沿用 M2 验证链路:物理像素域 + WinEvent + 33ms 节流)
+# 窗口跟随 ZCode 右缘(物理像素域 + WinEvent + 33ms 节流,M2 验证链路)
 # =====================================================================
 $script:zcodePid = 0
 $script:zcodeHwnd = [IntPtr]::Zero
@@ -335,112 +529,21 @@ function Find-ZcodeWindow([int]$targetPid) {
   }
   return [IntPtr]::Zero
 }
-function Get-WidgetHwnd {
-  if ($script:helper) { return $script:helper.Handle }
-  return [IntPtr]::Zero
-}
-function Set-WidgetRegion([string]$mode) {
-  # 形状 = 面板胶囊 ∪ fab 域;base = 弧线细带+端帽(带外无窗口=透桌面);open = 整圆(悬停齿轮气泡)
-  # 坐标优先用页面 shape 消息的视口实测值(×dpr);shape 未到时回退 outline 正则推算(仅启动瞬间)
-  $h = Get-WidgetHwnd
-  if (([int64]$h) -eq 0) { return }
-  $dpr = [double]$script:pageDpr
-  if ($dpr -le 0) {
-    $d = [ButlerNative.Win]::GetDpiForWindow($h)
-    if ($d -eq 0) { $d = 96 }
-    $dpr = $d / 96.0
-  }
-  $src = 'shape'
-  $k = 0.0; $wp = 0
-  $parts = New-Object System.Collections.ArrayList
-  $capPts = $null
-  if ($script:shapeCapsule -and $script:shapeCapsule.Count -ge 3) {
-    $capPts = [ButlerGdi+PT[]]::new($script:shapeCapsule.Count)
-    for ($i = 0; $i -lt $script:shapeCapsule.Count; $i++) {
-      # 值类型先整只装好再进数组:PS 对数组元素的结构体字段赋值不落盘(装箱副本)
-      $p = [ButlerGdi+PT]::new()
-      $p.X = [int][Math]::Round([double]$script:shapeCapsule[$i][0] * $dpr)
-      $p.Y = [int][Math]::Round([double]$script:shapeCapsule[$i][1] * $dpr)
-      $capPts[$i] = $p
-    }
-  }
-  elseif ($script:outlinePts.Count -ge 3) {
-    $src = 'calc'
-    $k = ($script:winH * $dpr) / 2025.0
-    $wp = [int][Math]::Round($script:winW * $dpr)
-    $capPts = [ButlerGdi+PT[]]::new($script:outlinePts.Count)
-    for ($i = 0; $i -lt $script:outlinePts.Count; $i++) {
-      $p = [ButlerGdi+PT]::new()
-      $p.X = [int][Math]::Round($wp - (430.0 - $script:outlinePts[$i][0]) * $k)
-      $p.Y = [int][Math]::Round($script:outlinePts[$i][1] * $k)
-      $capPts[$i] = $p
-    }
-  }
-  if (-not $capPts) { return }
-  [void]$parts.Add([ButlerGdi]::CreatePolygonRgn($capPts, $capPts.Count, 2))
-  if ($mode -eq 'open') {
-    if ($script:shapeFabC) {
-      $cx = [int][Math]::Round([double]$script:shapeFabC[0] * $dpr)
-      $cy = [int][Math]::Round([double]$script:shapeFabC[1] * $dpr)
-      $r = [int][Math]::Round([double]$script:shapeFabR * $dpr)
-      [void]$parts.Add([ButlerGdi]::CreateEllipticRgn(($cx - $r), ($cy - $r), ($cx + $r), ($cy + $r)))
-    }
-    elseif ($k -gt 0) {
-      $r = [int][Math]::Round(84.0 * $k)
-      $cx = [int][Math]::Round($wp - (430.0 - 317.0) * $k)
-      $cy = [int][Math]::Round(1675.0 * $k)
-      [void]$parts.Add([ButlerGdi]::CreateEllipticRgn(($cx - $r), ($cy - $r), ($cx + $r), ($cy + $r)))
-    }
-  }
-  elseif ($script:shapeBand -and $script:shapeBand.Count -ge 3) {
-    $bpts = [ButlerGdi+PT[]]::new($script:shapeBand.Count)
-    for ($i = 0; $i -lt $script:shapeBand.Count; $i++) {
-      $p = [ButlerGdi+PT]::new()
-      $p.X = [int][Math]::Round([double]$script:shapeBand[$i][0] * $dpr)
-      $p.Y = [int][Math]::Round([double]$script:shapeBand[$i][1] * $dpr)
-      $bpts[$i] = $p
-    }
-    [void]$parts.Add([ButlerGdi]::CreatePolygonRgn($bpts, $bpts.Count, 2))
-    if ($script:shapeCaps) {
-      $cr = [double]$script:shapeBandR * $dpr    # 端帽圆(描边 round cap)
-      foreach ($cap in @($script:shapeCaps)) {
-        $ccx = [int][Math]::Round([double]$cap[0] * $dpr)
-        $ccy = [int][Math]::Round([double]$cap[1] * $dpr)
-        [void]$parts.Add([ButlerGdi]::CreateEllipticRgn([int]($ccx - $cr), [int]($ccy - $cr), [int]($ccx + $cr), [int]($ccy + $cr)))
-      }
-    }
-  }
-  $hRgn = [IntPtr]::Zero
-  if ($parts.Count -eq 1) { $hRgn = $parts[0] }
-  else {
-    $hRgn = [ButlerGdi]::CreateRectRgn(0, 0, 1, 1)
-    [void][ButlerGdi]::CombineRgn($hRgn, $parts[0], $parts[1], 2)
-    for ($j = 2; $j -lt $parts.Count; $j++) { [void][ButlerGdi]::CombineRgn($hRgn, $hRgn, $parts[$j], 2) }
-    foreach ($hp in $parts) { [void][ButlerGdi]::DeleteObject($hp) }
-  }
-  $ok = [ButlerGdi]::SetWindowRgn($h, $hRgn, $true)
-  WLog ('rgn(' + $mode + '/' + $src + ') ok=' + $ok + ' parts=' + $parts.Count)
-  if (-not $ok) { [void][ButlerGdi]::DeleteObject($hRgn) }   # 成功则系统接管 rgn,失败才自清
-}
-function Move-WidgetPhysical([int]$x, [int]$y) {
-  $h = Get-WidgetHwnd
-  if (([int64]$h) -eq 0) { $win.Left = $x; $win.Top = $y; return }
-  [void][ButlerNative.Win]::SetWindowPos($h, [IntPtr]::Zero, $x, $y, 0, 0, 0x15)
-}
+function Get-WidgetHwnd { return [ButlerHost]::Handle }
+function Move-WidgetPhysical([int]$x, [int]$y) { [ButlerHost]::MoveTo($x, $y) }
 function Position-Follow {
   if (([int64]$script:zcodeHwnd) -eq 0) { return }
   if (-not [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) { return }
   $r = New-Object ButlerNative.Win+RECT
   [ButlerNative.Win]::GetWindowRect($script:zcodeHwnd, [ref]$r) | Out-Null
   $wh = Get-WidgetHwnd
-  $wphys = [int][Math]::Round($script:winW * 1.75)   # 兜底按 175% 估;实际以 GetWindowRect 为准
+  $wphys = $script:winW
   if (([int64]$wh) -ne 0) {
     $wr = New-Object ButlerNative.Win+RECT
     [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
     if (($wr.Right - $wr.Left) -gt 0) { $wphys = $wr.Right - $wr.Left }
   }
   if ($null -eq $script:followOffsetY) { $script:followOffsetY = 40 }
-  # 悬浮窗右缘与 ZCode 右缘重合(HTML 舞台 430 宽里左侧是透明空隙,贴边量在页面内消化)
   $x = $r.Right - $wphys
   $y = $r.Top + [int]$script:followOffsetY
   Move-WidgetPhysical $x $y
@@ -477,6 +580,9 @@ function Detach-Zcode {
   $script:zcodePid = 0
 }
 
+$EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
+$WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
+
 $followTimer = New-Object System.Windows.Threading.DispatcherTimer
 $followTimer.Interval = [TimeSpan]::FromMilliseconds(33)
 $followTimer.Add_Tick({
@@ -484,9 +590,9 @@ $followTimer.Add_Tick({
   if ([ButlerState]::FollowDirty -eq 1) {
     [ButlerState]::FollowDirty = 0
     if (([int64]$script:zcodeHwnd) -ne 0 -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) {
-      if ([ButlerNative.Win]::IsIconic($script:zcodeHwnd)) { if ($win.IsVisible) { $win.Hide() } }
+      if ([ButlerNative.Win]::IsIconic($script:zcodeHwnd)) { if ([ButlerHost]::Visible) { [ButlerHost]::Hide() } }
       else {
-        if (-not $win.IsVisible) { $win.Show() }
+        if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() }
         Position-Follow
       }
     }
@@ -502,14 +608,15 @@ $rescanTimer.Add_Tick({
   $script:rescanBusy = $true
   try {
     if ($PSCommandPath -and -not (Test-Path $PSCommandPath)) {
-      try { if ($script:helper) { [ButlerNative.Win]::UnregisterHotKey($script:helper.Handle, 0xB001) | Out-Null } } catch { }
+      try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
+      [ButlerHost]::Destroy()
       [Environment]::Exit(0)
     }
     if ($script:dockMode -ne 'zcode-right') { return }
     $alive = (([int64]$script:zcodeHwnd) -ne 0) -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)
     if (-not $alive) {
       Detach-Zcode
-      if (Attach-Zcode) { if (-not $win.IsVisible) { $win.Show() } }
+      if (Attach-Zcode) { if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() } }
       else {
         $wh = Get-WidgetHwnd
         $screenW = [ButlerNative.Win]::GetSystemMetrics(0)
@@ -528,7 +635,7 @@ $rescanTimer.Add_Tick({
 $rescanTimer.Start()
 
 # =====================================================================
-# 位置记忆 / 热键 / 唤醒 / 启动
+# 位置记忆 / 唤醒 / 启动
 # =====================================================================
 function Save-Pos {
   try {
@@ -542,36 +649,16 @@ if (Test-Path $posFile) {
   } catch { }
 }
 
-$script:helper = $null
-$win.Add_SourceInitialized({
-  $script:helper = New-Object System.Windows.Interop.WindowInteropHelper($win)
-  [void][ButlerNative.Win]::RegisterHotKey($script:helper.Handle, 0xB001, 0x6, 0x47)
-  Set-WidgetRegion 'base'
-  $src = [System.Windows.Interop.HwndSource]::FromHwnd($script:helper.Handle)
-  $src.AddHook({
-    param($hwnd, $msg, $wParam, $lParam, [ref]$handled)
-    if ($msg -eq 0x0312 -and $wParam.ToInt64() -eq 0xB001) {
-      if ($win.IsVisible) { $win.Hide() } else { $win.Show() }
-      $handled.Value = $true
-    }
-    [IntPtr]::Zero
-  })
-})
-
-$win.Add_Closing({
+# 进程退出清理(等价旧版 Add_Closing)
+[AppDomain]::CurrentDomain.add_ProcessExit({
   try {
-    if ($script:helper) { [void][ButlerNative.Win]::UnregisterHotKey($script:helper.Handle, 0xB001) }
+    try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
     foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
     if ($script:nodeProc -and -not $script:nodeProc.HasExited) { try { $script:nodeProc.Kill() } catch { } }
     if ($script:pageFile -and (Test-Path $script:pageFile)) { try { Remove-Item -LiteralPath $script:pageFile -ErrorAction SilentlyContinue } catch { } }
     $mutex.ReleaseMutex() | Out-Null
   } catch { }
 })
-
-# fab 区域收回定时器:气泡淡出(0.26s CSS)后再缩回弧线带,450ms 留足余量;重入(fabenter)即取消
-$fabCloseTimer = New-Object System.Windows.Threading.DispatcherTimer
-$fabCloseTimer.Interval = [TimeSpan]::FromMilliseconds(450)
-$fabCloseTimer.Add_Tick({ $fabCloseTimer.Stop(); Set-WidgetRegion 'base' })
 
 # 唤醒:命名事件 + wake 文件(SessionStart hook touch)
 $wakeTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -583,16 +670,11 @@ $wakeTimer.Add_Tick({
     $script:lastWake = $wi.LastWriteTimeUtc
     $wake = $true
   }
-  if ($wake -and -not $win.IsVisible) { $win.Show() }
+  if ($wake -and -not [ButlerHost]::Visible) { [ButlerHost]::Show() }
 })
 $wakeTimer.Start()
 
-# 初始兜底位置(吸附成功时被 Position-Follow 覆盖):贴主屏右缘、垂直偏下
-$wa0 = [System.Windows.SystemParameters]::WorkArea
-$win.Left = $wa0.Right - $script:winW
-$win.Top = $wa0.Top + ($wa0.Height - $script:winH) / 2
-
 Invoke-Refresh
-if (-not $NoShowIfExists) { $win.Show() }
+if (-not $NoShowIfExists) { [ButlerHost]::Show() }
 if ($script:dockMode -eq 'zcode-right') { [void](Attach-Zcode) }
 [System.Windows.Threading.Dispatcher]::Run()

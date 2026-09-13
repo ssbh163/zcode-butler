@@ -468,13 +468,6 @@
     butlerSetRing('key', top ? top.pct : null, !!top);
   }
   if (window.chrome && window.chrome.webview) {
-    /* 窗口化 WebView2 无真透明(WebView2Feedback #915),外形由宿主 rgn 裁剪——
-       页面把形状内部涂满不透明面板色(读 --panel,主题换色自动联动) */
-    document.body.style.background = getComputedStyle(document.documentElement).getPropertyValue('--panel').trim() || '#030303';
-    /* WebView2 窗口化对 CSS transition 合成层有动画期渲染缺陷:气泡绽开动画期间整层变白
-       (浏览器同代码正常;静态强制态复测全黑,判定为动画期缺陷,2026-09-13)。
-       宿主模式禁过渡,弧线↔气泡改为瞬时切换,换取零白闪 */
-    document.querySelectorAll('.fab .disc, .fab .arc, .fab .gear-g').forEach(function (el) { el.style.transition = 'none'; });
     window.chrome.webview.addEventListener('message', function (e) {
       try {
         var msg = e.data;
@@ -489,9 +482,8 @@
       if (e.target.closest && e.target.closest('.fab-zone')) return;
       try { window.chrome.webview.postMessage('drag'); } catch (err) { }
     });
-    /* 形状上报:布局落定后把面板轮廓/fab 弧线带映射到视口坐标发给宿主建 rgn。
-       以页面实测为准——宿主端按 DIP×DPI 推算与真实渲染有 ~3px 偏差(实测事故),
-       推算区域比实际画的大,露出 WebView 控件区白底,即用户看到的 1px 环绕白边 */
+    /* 形状上报:布局落定后把面板轮廓/fab 圆映射到视口坐标发给宿主,
+       供宿主 WM_NCHITTEST 命中掩码使用(合成宿主下渲染与命中分离,边缘 AA 保真) */
     function butlerReportShape() {
       var stage = document.querySelector('.stage');
       var panel = document.getElementById('panelPath');
@@ -545,15 +537,6 @@
     }
     if (document.readyState === 'complete') { requestAnimationFrame(butlerReportShape); }
     else { window.addEventListener('load', function () { requestAnimationFrame(butlerReportShape); }); }
-    var fz = document.getElementById('fabZone');
-    if (fz) {
-      fz.addEventListener('pointerenter', function () {
-        try { window.chrome.webview.postMessage('fabenter'); } catch (err) { }
-      });
-      fz.addEventListener('pointerleave', function () {
-        try { window.chrome.webview.postMessage('fableave'); } catch (err) { }
-      });
-    }
   }
 </script>
 </body>
