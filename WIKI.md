@@ -64,7 +64,7 @@ assets/news.json ──> news.mjs
 ### 6. 悬浮窗(as-built,§4 的实现现状)
 
 - 架构(2026-09-13 v0.2.1 起,WebView2 方案):**WPF 窗口 + WebView2 控件做宿主壳,`butler-widget.html` 做全部渲染**。壳只管窗口/取数/桥接:无边框置顶窗(64×600 DIP,PerMonitorV2 DPI)、`node status.mjs --json`(异步+临时文件+UTF8+完整性校验,110 分钟定时)→ `CoreWebView2.PostWebMessageAsJson` 投给页面 `butlerApply`(收到页面 ready 消息后才投)。vendored DLL 在 `scripts/widget/webview2/`(NuGet 1.0.2739.15,x64,仅 LoadFrom 两个托管程序集);原生 `WebView2Loader.dll` 经 PATH 前置解析;用户数据目录显式指 `~/.zcode/butler-widget-wv2`(默认目录随宿主 exe 落 System32,不可写必失败;**同目录跨进程单例锁,并发第二实例报 0x8007139F**)
-- 窗口形状(v0.2.3):**SetWindowRgn 动态裁剪,坐标以页面实测为准**。页面加载后经 `shape` 消息上报视口坐标(胶囊轮廓/弧线带+端帽/fab 圆心半径 + dpr),宿主只做 ×dpr——宿主按 DIP×DPI 推算与真实渲染有 ~3px 偏差(v0.2.2 白边事故:推算区域偏大露出 WebView 控件区白底),推算仅作 shape 未到时的启动瞬间回退。默认态 = 胶囊 ∪ fab 弧线细带+端帽(带外无窗口,桌面直透、点击穿透);悬停态 = 胶囊 ∪ fab 整圆(容纳齿轮气泡),由页面 `pointerenter/pointerleave` 桥控制切换,移开 450ms 后收回。**不使用 AllowsTransparency**(分层窗口对 HwndHost 不参与透明合成,白底+命中异常);WS_EX_LAYERED 色键在本机(Win11 26200)SetWindowLong 假成功走不通。窗口底层与 WebView `DefaultBackgroundColor` 均为面板同黑 #030303
+- 窗口形状(v0.2.4):**SetWindowRgn 动态裁剪,坐标以页面实测为准**。页面加载后经 `shape` 消息上报视口坐标(胶囊轮廓/弧线带+端帽/fab 圆心半径 + dpr),宿主只做 ×dpr——宿主按 DIP×DPI 推算与真实渲染有 ~3px 偏差(v0.2.2 白边事故),推算仅作 shape 未到时的启动瞬间回退。默认态 = 胶囊 ∪ fab 弧线细带+端帽(带外无窗口,桌面直透、点击穿透);悬停态 = 胶囊 ∪ fab 整圆(容纳齿轮气泡),由页面 `pointerenter/pointerleave` 桥控制切换,移开 450ms 后收回。**白色像素三重根治(v0.2.4)**:①窗口化 WebView2 无真透明([WebView2Feedback #915](https://github.com/MicrosoftEdge/WebView2Feedback/issues/915):opacity 不支持)——宿主模式 body 涂面板黑,形状内不残留透明像素;②file:// 页面被磁盘缓存会跑旧版——每次复制到随机临时路径加载(正本唯一);③CSS transition 合成层在动画期渲染为白(气泡绽开白闪)——宿主模式禁过渡,弧线↔气泡瞬时切换(浏览器直开仍有完整动画)。**不使用 AllowsTransparency**;WS_EX_LAYERED 色键在本机(Win11 26200)SetWindowLong 假成功走不通
 - 渲染层:用户定稿 HTML 副本 + 五处最小改动(去壁纸 / 舞台贴右 + fit 按窗高等比缩放 / 数据桥 butlerSetRing·butlerApply / 拖动桥 / 无)。四环 = 5h 池 / 每周 / MCP 月 / 用量最高 Key,环心文字 glyph(5h/7d/mcp/key)+ 下方百分比;高峰橙色光晕由页面按本机时间判(工作日 14–18 点);fab 细弧悬停变形齿轮气泡(纯 CSS :hover,已实测生效)
 - 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
 - 交互:面板拖动 = 页面 pointerdown → 宿主 DragMove → 折算 offsetY 记 `butler-widget.pos.json`(fab 区除外);Ctrl+Shift+G 显隐;wake 双通道唤回;fab 齿轮为页面内悬停变形 + 点击反馈,**暂无宿主动作**(设置卡/Key 管理/资讯面板待 HTML 内重建,见已知限制)
@@ -102,6 +102,13 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 ## 二、变更历史
 
 (按时间倒序,每条含:背景 / 改动 / 影响范围 / 回滚方案)
+
+### [v0.2.4] 2026-09-13 残留白色像素三重根治
+
+- **背景**:用户指出仍有细微白色像素,且气泡绽开时按钮周围出现大片白色像素。
+- **改动**:三个独立缺陷一次修净——①窗口化 WebView2 无真 alpha([WebView2Feedback #915](https://github.com/MicrosoftEdge/WebView2Feedback/issues/915)、[官方文档](https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2controller.defaultbackgroundcolor)):页面透明/半透明像素摊到白底 → 宿主模式 body 涂面板黑 #030303,边缘抗锯齿与气泡环不再泛白;②file:// 页面被 WebView2 磁盘缓存,改版后仍跑旧页 → 每次复制到随机临时路径加载(Closing 时清理);③气泡绽开动画期整层变白 = WebView2 对 CSS transition 合成层的动画期渲染缺陷(浏览器同代码正常、静态强制态全黑,二分定位)→ 宿主模式禁过渡,弧线↔气泡瞬时切换。
+- **影响范围**:butler-widget.html + butler-widget.ps1;status 协议零改动;实测左缘 22→3 直接相切、气泡区(强制常开态)全黑仅齿轮 236、248 白计数为 0;回归 45+23 通过。
+- **回滚方案**:`git checkout b086fbc -- plugins/zcode-butler/scripts/widget/` 回 v0.2.3(白像素回来)。
 
 ### [v0.2.3] 2026-09-13 消除 1px 环绕白边(区域坐标改页面实测)
 

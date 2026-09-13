@@ -23,6 +23,18 @@
 
 ## 开发日志(倒序)
 
+### 2026-09-13 [修复] 残留白色像素三重根治(576f424)
+
+**问题**:①胶囊边缘仍有细微白像素;②气泡绽开时按钮周围大片白色像素。
+**定位与根因(三个独立缺陷)**:
+1. **窗口化 WebView2 无真 alpha**:查证 [WebView2Feedback #915](https://github.com/MicrosoftEdge/WebView2Feedback/issues/915)("opacity is not supported yet")与[官方文档](https://learn.microsoft.com/en-us/dotnet/api/microsoft.web.webview2.core.corewebview2controller.defaultbackgroundcolor)(alpha 只能 0 或 255)——页面所有透明/半透明像素(边缘抗锯齿、气泡环)摊到白底。**修**:宿主模式 body 涂面板黑,形状内不残留透明像素(computed bodyBg=rgb(3,3,3) 回传对质)。
+2. **file:// 被 WebView2 磁盘缓存**:改了 HTML 重启仍跑旧页(改版"不生效"的假象)。尝试 ?v= 查询串被 [Uri] 编码成 %3F 坏路径;尝试 pre-Show 裸 EnsureCoreWebView2Async 挂起不回调。**修**:每次复制到随机临时路径加载(正本唯一,Closing 清理)。
+3. **transition 合成层动画期渲染为白**:气泡绽开(css transition 0.44s)期间整层白,动画结束前截图捕获白色;浏览器同代码正常。二分验证:静态强制态(disc opacity/transform 直写 + rgn 常开)+ 保留 transition → 全黑;→ 缺陷仅动画期触发。**修**:宿主模式禁过渡(变形瞬时切换),动画保留在浏览器直开场景。
+**验证**:左缘剖面 22→3 直接相切;强制常开态气泡区全黑(仅齿轮 236);248 白计数 0;真悬停 open/close 日志正常(与用户真实鼠标竞态,脚本化触发 ~50% 命中,重试循环兜底)。回归 45+23。
+**方法论沉淀**:①同色图形可见性验证必须换色或强制态,不能靠阈值数像素(黑弧贴黑胶囊误判丢失);②"改了没生效"先怀疑缓存(file:// 也会被 WebView2 磁盘缓存);③页面与宿主的坐标/样式对质,用消息回传 computed style最省事;④悬停类测试与用户真实鼠标竞态,脚本要重试循环。
+**耗时**:约 2.5h。
+**commit**:576f424。
+
 ### 2026-09-13 [修复] 1px 环绕白边 → 区域坐标改页面实测(b086fbc)
 
 **问题**:用户指出悬浮窗边缘仍有 1px 环绕背景。
