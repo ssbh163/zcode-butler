@@ -94,11 +94,19 @@ py -m unittest discover -s plugins/zcode-butler/scripts/chat2doc -p "*_test.py"
 - 假设脚本可能被非 shell 环境拉起(PATH 为空):查找 node 等外部依赖时内置多候选路径探测,不只试 PATH
 - 任何失败路径给出"缺什么、去哪装、点哪里"的明确指引,禁止静默吞错或返回神秘错误码
 - 悬浮窗新增交互控件时,检查窗口级全局事件(拖拽 DragMove / 热键 / 事件冒泡)是否拦截该控件的点击
+- **Agent 工具链自陷阱(悬浮窗 v0.2~v0.3 反复发生,全部实测)**:
+  - bash 调 PowerShell 内联命令,双引号嵌套转义会静默弄坏命令且看起来"跑过了"——复杂调用一律 `-File` 脚本文件,内联只允许单行无嵌套引号
+  - **禁止用 py heredoc / `py -c` 做文件内容替换**(转义与编码双重陷阱,三次事故);改文件只用编辑工具,改完核验
+  - `powershell -File` 起新脚本偶尔报"在创建管道时出错"(系统瞬时压力),重试即可,不代表脚本有错
+  - 窗口坐标/尺寸的验证探针必须与目标进程同 DPI 感知级别,否则读数被虚拟化(÷scale)误导结论;查窗口用 EnumWindows+GetClassName,FindWindow/Get-Process.MainWindowTitle 不可靠
+  - CodeDom(`Add-Type -TypeDefinition`)把 C# 源按无 BOM 临时文件喂 csc:**C# 源内非 ASCII 字面量会被按 ANSI 误读**——内联 C# 一律 ASCII;`-ReferencedAssemblies` 里 WPF 程序集(WindowsBase 等)必须给已加载程序集的 `Location` 全路径,csc 不探测 WPF 子目录
+  - WebView2 的 vendored DLL 与系统 Runtime **必须同构建号代际**(如 SDK 1.0.4191 ↔ Runtime 152.0.4191),Raw 接口 IID 跨代不兼容直接报 cast 失败
 
 **验证**
 - 改完必须跑检查:Node 用 `node --check` 且实际执行关键路径;PowerShell 用 `[scriptblock]::Create` 语法检查,内嵌 XAML 要真实 `XamlReader.Parse`;sh 改动要真实执行关键行(`bash -n` 查不出运行时错误)
 - 涉及另一平台、本机无法验证的改动(编译/快捷键/焦点),交付说明里列"需真机验证"清单,不许默认它能工作
 - 行为变更或 bug 修复同步 bump 版本号并写更新日志
+- 同色/近色图形的可见性验证必须换色或强制态,不能靠阈值数像素(黑弧贴黑胶囊曾误判"弧线丢失")
 
 ## 注意事项
 

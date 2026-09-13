@@ -35,6 +35,7 @@
 6. 输入:`WM_MOUSE*` 直接按消息号 cast 成 MouseEventKind(值一致;Leave=675);滚轮 lParam 是屏幕坐标须转客户区;`TrackMouseEvent` 补 Leave。
 7. **DPI 无关探针的读数是虚拟化的**(÷1.75),窗口尺寸/位置验证必须在 PMv2 进程里做——曾因 DPI-unaware 探针的 64×600 读数误判窗口尺寸错误。
 **验证**:1:1 截图——月牙区真透出白主题 ZCode、边缘 AA 平滑(视觉判读无明显锯齿/白边)、四环真实数据(100/55/14/8)、fab 悬停气泡绽开(输入转发通,合成模式下过渡动画无 v0.2.4 白闪);掩码 810 点+fab 圆生效;回归 45+23。
+**内存实测(2026-09-13,私有内存口径)**:壳 powershell 69.4MB + 6 个 msedgewebview2 合计 221.7MB ≈ **291MB**(WorkingSet 口径 557MB,含进程间共享重复计数)。对比口径:Electron 常驻约 100~180MB(OpenDesign 数据)——本机 fresh UDF 下合成 WebView2 并不比 Electron 轻,浏览器侧(Chromium)成本两者同源;WebView2 的共享优势只在系统里已有其他 WebView2/Evergreen 实例时部分兑现。结论供选型存档:内存不是留 WebView2 的理由,**零打包运行时 + 与现有 PS 壳同进程**才是。
 **遗留(待真机人工验收)**:拖动手感/月牙区点击穿透/键盘/跟随/最小化恢复;SetWindowTextW 内部不生效之谜。
 **耗时**:约 3h。
 **commit**:5de0d6b。
