@@ -23,6 +23,21 @@
 
 ## 开发日志(倒序)
 
+### 2026-09-13 [探索] OpenDesign 方案验证:合成路线三轮复现与 ADR(无代码变更)
+
+**背景**:用户提供 OpenDesign 建议(GLM 4.5 Flash)——①Composition(Visual) hosting 正解,并称 SDK 内有现成 `WebView2CompositionControl` "换控件名就能用";②Acrylic;③换引擎。逐条实证。
+**验证过程与发现**:
+1. **`WebView2CompositionControl` 确实存在于 vendored Wpf.dll**(反射证实,public 无参构造,Source/CoreWebView2/CreationProperties/WebMessageReceived 事件齐全);
+2. **PS `New-Object` 解析不到它**(报"找不到类型"),`[Activator]::CreateInstance(程序集.GetType(...))` 才能实例化——New-Object 的类型解析器对 LoadFrom 程序集内该类型失效,PS 5.1 新坑。**前两轮复现"不初始化"实为 null 控件,教训:SilentlyContinue 下 $null 控件安静流过全链路,构造后必须立刻断言非空**;
+3. 正确实例化后:分层窗口(AllowsTransparency)中不初始化(DComp 目标与 WPF ULW 重定向互斥,符合原理);**普通 WPF 窗口中同样不初始化**——疑似控件内部 WinRT(Windows.UI.Composition)依赖在 .NET Framework 宿主静默失败;
+4. `WS_EX_NOREDIRECTIONBITMAP` 事后补挂在 WPF 窗口上与 LAYERED 一样粘不住(SetWindowLong 返回旧值但不落盘,Win11 26200)。
+**ADR:v0.3.0 悬浮窗真透明(逐像素 alpha)架构**
+- **背景**:窗口化 WebView2 无 alpha(v0.2.x 系列事故总根因);官方合成控件在 PS 宿主不可用;WPF 窗口拿不到 NOREDIRECTIONBITMAP。
+- **选项**:A) 维持 rgn+不透明 body(现状,硬边);B) Acrylic(v0.2.4 已证 DefaultBackgroundColor 在本宿主无效,且 rgn 裁硬边问题依旧,否决);C) 换引擎 Electron/CEF(违背零依赖与体量约束,否决);D) **Add-Type 内联 C# 宿主:原生 Win32 窗口(创建时带 WS_POPUP|WS_EX_NOREDIRECTIONBITMAP|WS_EX_TOPMOST|WS_EX_TOOLWINDOW)+ DCompositionCreateDevice→CreateTargetForHwnd→CreateVisual + `CoreWebView2Environment.CreateCoreWebView2CompositionControllerAsync` → RootVisualTarget/DefaultBackgroundColor=0 + WM_MOUSE*/键盘→SendMouseInput 手工转发 + CursorChanged→SetCursor + WM_NCHITTEST 形状掩码穿透**。
+- **决策**:选 D,作为 v0.3.0 独立里程碑(新会话专注实施);v0.2.x 维持现状可用。
+- **后果**:一次性解决任意背景 AA 边缘/过渡动画白闪/rgn 全家桶退休;代价 ~400 行 C# COM/WinRT interop 与输入转发,真机调试量可观;PS 侧跟随/热键/wake/数据链全部保留,只把窗口句柄源换成 C# 窗口。
+**耗时**:约 1.5h(四轮复现)。
+
 ### 2026-09-13 [探索+改进] 任意背景透明路线证伪与换色就绪(e1339ca)
 
 **问题**:用户反馈 ZCode 白主题下悬浮窗曲线边缘"毛毛糙糙",且未来悬浮窗会换色、ZCode 背景会变——"body 涂面板色"方案与具体颜色耦合,不可持续。

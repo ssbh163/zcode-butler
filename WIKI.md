@@ -69,7 +69,7 @@ assets/news.json ──> news.mjs
 - 定位:**物理像素域 SetWindowPos**(混合 DPI 多屏下 DIP 数学不可靠,踩坑见 DEV RECORD M2-9);默认吸附 ZCode 主窗右缘(`Get-Process.MainWindowHandle` 定位,host.json ppid 提示+进程名验证);WinEvent(LOCATIONCHANGE + MINIMIZESTART/END)→ 静态字段置脏 → 33ms 节流重定位;ZCode 最小化隐藏/还原恢复;退出退主屏右缘 + 2.5s 重扫重吸附;`butler.json widget.dock: zcode-right|screen-right` 可切
 - 交互:面板拖动 = 页面 pointerdown → 宿主 DragMove → 折算 offsetY 记 `butler-widget.pos.json`(fab 区除外);Ctrl+Shift+G 显隐;wake 双通道唤回;fab 齿轮为页面内悬停变形 + 点击反馈,**暂无宿主动作**(设置卡/Key 管理/资讯面板待 HTML 内重建,见已知限制)
 - 生命周期:互斥量 `Global\ZCode-Butler-Widget` + EventWaitHandle + wake 文件双通道;脚本被删自动退出;初始化失败(Runtime 缺失)以 mshta 分离进程弹非阻塞提示后退出
-- 已知限制:原生版齿轮折叠卡(归档入口/Key 增删/设置)与资讯面板未在 HTML 内重建;高峰判定用页面本机时间(status.mjs 口径是服务端北京时间,两处口径不一致但无实害);fab 悬停热区 = 弧线细带本体(约 14 物理px 宽,绽开后整圆皆热区);运行中 DPI 变更不重算 rgn;**悬浮窗边缘为 1px 硬切区域边(rgn 二值边缘的本质属性)——与背景高对比(如 ZCode 白主题)时曲线段有轻微台阶感;body 底色已联动 --panel 变量(换主题色内部自动一致),任意背景下的平滑边缘需 DComp 合成宿主重写(见 PROJECT 备选),AllowsTransparency+内嵌 WebView 已三变体复现证伪(本机子窗口无法初始化)**;**拖动/热键/跟随移动/最小化恢复待真机人工验收**;运行需系统 WebView2 Runtime(Win10/11 一般自带,缺则弹安装指引)
+- 已知限制:原生版齿轮折叠卡(归档入口/Key 增删/设置)与资讯面板未在 HTML 内重建;高峰判定用页面本机时间(status.mjs 口径是服务端北京时间,两处口径不一致但无实害);fab 悬停热区 = 弧线细带本体(约 14 物理px 宽,绽开后整圆皆热区);运行中 DPI 变更不重算 rgn;**悬浮窗边缘为 1px 硬切区域边(rgn 二值边缘的本质属性)——与背景高对比(如 ZCode 白主题)时曲线段有轻微台阶感;body 底色已联动 --panel 变量(换主题色内部自动一致);真·任意背景平滑边缘需 v0.3.0 C# 合成宿主重写(ADR 见 DEV RECORD 2026-09-13:官方 WebView2CompositionControl 在 PS 宿主三种窗口模型均无法初始化,New-Object 还解析不到它须用 Activator)**;**拖动/热键/跟随移动/最小化恢复待真机人工验收**;运行需系统 WebView2 Runtime(Win10/11 一般自带,缺则弹安装指引)
 
 ### 7. Chat2Doc 流水线(as-built)
 
