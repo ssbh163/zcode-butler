@@ -23,6 +23,16 @@
 
 ## 开发日志(倒序)
 
+### 2026-09-13 [探索+改进] 任意背景透明路线证伪与换色就绪(e1339ca)
+
+**问题**:用户反馈 ZCode 白主题下悬浮窗曲线边缘"毛毛糙糙",且未来悬浮窗会换色、ZCode 背景会变——"body 涂面板色"方案与具体颜色耦合,不可持续。
+**路线探索(全部实证)**:
+1. **AllowsTransparency(WPF 真逐像素 alpha)+ 内嵌 WebView**:设想是 WPF 画胶囊真 AA 边缘、WebView 只占内部内容矩形(全不透明页)。三种布局(Canvas+SetLeft / Grid+Margin / 直接)× 加 DPI 声明 × 20s 等待 × 清残留浏览器进程,复现结果一致:**分层窗口内 WebView2 子窗口连 CoreWebView2InitializationCompleted 都不触发**(WPF 自身半透明红背景渲染正常)——本机(Win11 26200)证伪。此前 v0.2.0 曾在 AllowsTransparency 下渲染成功的记忆存疑(无法复现,不再依赖)。
+2. **结论**:窗口化 WebView2 逐像素 alpha = 0;真任意背景平滑边缘唯一路径 = **DComp 合成宿主**(CoreWebView2CompositionController + Windows.UI.Composition/ID3D11,PS 5.1 不可行,需 Add-Type 编译 C# 宿主,~天级工程)——记入 PROJECT 备选,未实施。
+**落地改进**:①body 底色改读 `--panel` 变量(getComputedStyle,换主题色一处联动);②胶囊轮廓沿实际渲染路径每 4 舞台px 重采样(~810 点)。**诚实说明:密集采样只让 rgn 更贴曲线(几何更准),1px 硬边台阶是 rgn 二值边缘的本质,高对比背景下的轻微台阶感在 DComp 重写前无法消除。**
+**耗时**:约 1.5h(复现三轮 1h + 改进验证 0.5h)。
+**commit**:e1339ca。
+
 ### 2026-09-13 [修复] 残留白色像素三重根治(576f424)
 
 **问题**:①胶囊边缘仍有细微白像素;②气泡绽开时按钮周围大片白色像素。
