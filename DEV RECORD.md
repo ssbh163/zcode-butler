@@ -23,6 +23,22 @@
 
 ## 开发日志(倒序)
 
+### 2026-09-13 [实现] v0.3.0 合成宿主落地:真逐像素透明(5de0d6b)
+
+**背景**:用户明确最终目标 = 悬浮窗无环绕像素、任意背景干净边缘,要求换 Electron 前穷尽 WebView2;OpenDesign 建议 Composition hosting。
+**实现要点与连环坑(全部实测)**:
+1. **vendored DLL 必须与 Runtime 同代**:SDK 2739 的 DLL 对 Runtime 152 报 `ICoreWebView2Environment3` cast 失败(Raw 接口 IID 跨 SDK 代变)→ 换 **1.0.4191.47**(与 Runtime 152.0.4191 构建号配对,从 nuget.org 拉取)即通。
+2. **csc 引用路径**:`WindowsBase.dll` 简名解析不了(CodeDom 不探测 WPF 子目录)→ 用已加载程序集的 `Location` 全路径。
+3. **C# 源经 CodeDom 临时文件编译,非 ASCII 字面量被按 ANSI 误读**(窗口标题变乱码)→ C# 内一律 ASCII;内部 SetWindowTextW 仍不生效之谜未解(外部进程调用正常,截图工具改按窗口类名找窗绕过)。
+4. **同步创建链必须泵消息**:`CreateCoreWebView2CompositionControllerAsync` 会向宿主窗口 SendMessage,裸 `.Result` 不泵即死锁 → PumpWait(PeekMessage/Dispatch 循环);且 `Dispatcher.CurrentDispatcher` 会装同步上下文加剧死锁,延后获取。
+5. **上屏三件套**:`CreateTargetForHwnd(hwnd, topmost=TRUE)`(FALSE 时页面 rAF 都不跑,shape 消息不到);`RootVisualTarget` 赋值后**必须再 `_device.Commit()`**(缺它=纯透明);`IsVisible=true + NotifyParentWindowPositionChanged()`。
+6. 输入:`WM_MOUSE*` 直接按消息号 cast 成 MouseEventKind(值一致;Leave=675);滚轮 lParam 是屏幕坐标须转客户区;`TrackMouseEvent` 补 Leave。
+7. **DPI 无关探针的读数是虚拟化的**(÷1.75),窗口尺寸/位置验证必须在 PMv2 进程里做——曾因 DPI-unaware 探针的 64×600 读数误判窗口尺寸错误。
+**验证**:1:1 截图——月牙区真透出白主题 ZCode、边缘 AA 平滑(视觉判读无明显锯齿/白边)、四环真实数据(100/55/14/8)、fab 悬停气泡绽开(输入转发通,合成模式下过渡动画无 v0.2.4 白闪);掩码 810 点+fab 圆生效;回归 45+23。
+**遗留(待真机人工验收)**:拖动手感/月牙区点击穿透/键盘/跟随/最小化恢复;SetWindowTextW 内部不生效之谜。
+**耗时**:约 3h。
+**commit**:5de0d6b。
+
 ### 2026-09-13 [探索] OpenDesign 方案验证:合成路线三轮复现与 ADR(无代码变更)
 
 **背景**:用户提供 OpenDesign 建议(GLM 4.5 Flash)——①Composition(Visual) hosting 正解,并称 SDK 内有现成 `WebView2CompositionControl` "换控件名就能用";②Acrylic;③换引擎。逐条实证。
