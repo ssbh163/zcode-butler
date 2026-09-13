@@ -468,10 +468,9 @@
     butlerSetRing('key', top ? top.pct : null, !!top);
   }
   if (window.chrome && window.chrome.webview) {
-    /* 窗口化 WebView2 无真透明(WebView2Feedback #915:opacity 不支持;透明像素被摊到白底),
-       外形已由宿主 SetWindowRgn 裁剪——页面只需把形状内部涂满不透明面板黑,
-       边缘抗锯齿与气泡绽开环就不再泛白 */
-    document.body.style.background = '#030303';
+    /* 窗口化 WebView2 无真透明(WebView2Feedback #915),外形由宿主 rgn 裁剪——
+       页面把形状内部涂满不透明面板色(读 --panel,主题换色自动联动) */
+    document.body.style.background = getComputedStyle(document.documentElement).getPropertyValue('--panel').trim() || '#030303';
     /* WebView2 窗口化对 CSS transition 合成层有动画期渲染缺陷:气泡绽开动画期间整层变白
        (浏览器同代码正常;静态强制态复测全黑,判定为动画期缺陷,2026-09-13)。
        宿主模式禁过渡,弧线↔气泡改为瞬时切换,换取零白闪 */
@@ -499,7 +498,13 @@
       if (!stage || !panel) return;
       var sr = stage.getBoundingClientRect();
       var kx = sr.width / 430, ky = sr.height / 2025;
-      var caps = outline.map(function (p) { return [sr.left + p[0] * kx, sr.top + p[1] * ky]; });
+      /* 胶囊轮廓:沿实际渲染的平滑路径每 4 舞台px 重采样(非 250 点折线)——
+         rgn 紧贴曲线,高对比背景下边缘台阶最小化 */
+      var PL = panel.getTotalLength(), caps = [], d, pp;
+      for (d = 0; d <= PL; d += 4) {
+        pp = panel.getPointAtLength(d);
+        caps.push([sr.left + pp.x * kx, sr.top + pp.y * ky]);
+      }
       function mapF(v) { return [sr.left + (v[0] + 220.5) * kx, sr.top + (v[1] + 1578) * ky]; }
       var band = null, arcCaps = null, bandR = 0, fabC = null, fabR = 0;
       var arc = document.getElementById('arcPath');
