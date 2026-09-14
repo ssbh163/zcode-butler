@@ -44,6 +44,7 @@ $script:lastWake = [datetime]::MinValue
 if (Test-Path $wakeFile) { $script:lastWake = (Get-Item $wakeFile).LastWriteTimeUtc }
 $dbgLog = Join-Path $env:TEMP 'butler-widget-debug.log'
 function WLog($m) { try { Add-Content -Path $dbgLog -Value ("{0} {1}" -f (Get-Date -Format 'MM-dd HH:mm:ss'), $m) } catch { } }
+function WLogRaw($m) { try { [IO.File]::AppendAllText($dbgLog, [DateTime]::Now.ToString('MM-dd HH:mm:ss') + ' ' + $m + [char]13 + [char]10) } catch { } }   # 全 .NET:ProcessExit/原生回调期 cmdlet 不可用
 
 $script:dockMode = 'zcode-right'
 $script:refreshMinutes = 110
@@ -120,6 +121,10 @@ public static class ButlerHost {
   public static Action<string> OnMessage;
   public static Action OnHotKey;
   public static Action<string> Log = delegate { };
+  public static string DbgPath = "";   // RawLog 用:原生回调/引擎拆除期 cmdlet 不可用,须纯 .NET 写文件
+  private static void RawLog(string s) {
+    try { System.IO.File.AppendAllText(DbgPath, DateTime.Now.ToString("MM-dd HH:mm:ss") + " " + s + "\r\n"); } catch { }
+  }
 
   private const uint WM_DESTROY = 2, WM_SIZE = 5, WM_ERASEBKGND = 0x14,
     WM_SETCURSOR = 0x20, WM_MOUSEMOVE = 0x200, WM_LBUTTONDOWN = 0x201, WM_LBUTTONUP = 0x202,
@@ -356,13 +361,17 @@ public static class ButlerHost {
         }
         return IntPtr.Zero;
       case WM_ERASEBKGND: return (IntPtr)1;
-      case WM_DESTROY: _destroyed = true; PostQuitMessage(0); return IntPtr.Zero;
+      case WM_DESTROY:
+        _destroyed = true;
+        RawLog("wm_destroy");
+        PostQuitMessage(0); return IntPtr.Zero;
     }
     return DefWindowProc(h, msg, wp, lp);
   }
 }
 '@ -ReferencedAssemblies @('System.dll', ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'System.Drawing' } | Select-Object -First 1).Location, ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'WindowsBase' } | Select-Object -First 1).Location, ($asmCore.Location))
 [ButlerHost]::Log = { param($s) WLog $s }
+[ButlerHost]::DbgPath = $dbgLog
 
 # ---- 窗口尺寸(HTML 舞台 430×2025,面板带宽 ≈211;物理像素直建) ----
 $script:stageH = 600.0
@@ -611,6 +620,27 @@ function Test-ZcodeAlive {
   return $false
 }
 
+# 显式退出清场(2026-09-15 实测定论:PS 5.1 的 [Environment]::Exit 不触发 ProcessExit,
+# 旧"清理全放 ProcessExit"设计从未执行过——带活 WebView2 原生线程硬拆进程 = WER 崩溃)。
+# 一切退出路径必须经此函数:关控制器(窗口已毁则跳过,摸死窗口同样 AV)→ 毁窗 → 清资源 → Exit
+function Stop-Widget([string]$reason) {
+  WLog ('exit: ' + $reason)
+  try {
+    if ([ButlerNative.Win]::IsWindow((Get-WidgetHwnd))) {
+      [ButlerHost]::Shutdown()
+      WLog 'exit: shutdown done'
+    } else { WLog 'exit: window dead, skip shutdown' }
+  } catch { WLog ('exit: shutdown THREW ' + $_.Exception.Message) }
+  try { [ButlerHost]::Destroy() } catch { }
+  try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
+  foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
+  if ($script:nodeProc -and -not $script:nodeProc.HasExited) { try { $script:nodeProc.Kill() } catch { } }
+  if ($script:pageFile -and (Test-Path $script:pageFile)) { try { Remove-Item -LiteralPath $script:pageFile -ErrorAction SilentlyContinue } catch { } }
+  try { $mutex.ReleaseMutex() | Out-Null } catch { }
+  WLog 'exit: cleanup done'
+  [Environment]::Exit(0)
+}
+
 $EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
 $EVENT_OBJECT_SHOW = 0x8002; $EVENT_OBJECT_HIDE = 0x8003   # ZCode 右上角 X = 窗口隐藏(进程存活),只有这对事件能探到
 $WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
@@ -645,15 +675,13 @@ $rescanTimer.Add_Tick({
   try {
     if ($PSCommandPath -and -not (Test-Path $PSCommandPath)) {
       try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
-      [ButlerHost]::Shutdown()   # 先关控制器(窗口尚活),再毁窗——反过来会在 ProcessExit 里 Close 死窗口(AV)
-      [ButlerHost]::Destroy()
-      [Environment]::Exit(0)
+      Stop-Widget 'script-deleted(插件卸载)'
     }
-    if (-not (Test-ZcodeAlive)) { [Environment]::Exit(0) }
+    if (-not (Test-ZcodeAlive)) { Stop-Widget 'zcode-dead' }
     if ($script:dockMode -ne 'zcode-right') { return }
     # owned window 随 owner 销毁:自身句柄失效 = ZCode 主窗已亡(进程还活=窗口重建期),
     # 退出清场,待下次 SessionStart wake 重拉
-    if (-not [ButlerNative.Win]::IsWindow((Get-WidgetHwnd))) { [Environment]::Exit(0) }
+    if (-not [ButlerNative.Win]::IsWindow((Get-WidgetHwnd))) { Stop-Widget 'widget-hwnd-dead' }
     $alive = (([int64]$script:zcodeHwnd) -ne 0) -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)
     if (-not $alive) {
       Detach-Zcode
@@ -683,8 +711,10 @@ if (Test-Path $posFile) {
 }
 
 # 进程退出清理(等价旧版 Add_Closing)
+# ProcessExit 实测不触发(见 Stop-Widget 注释),此块仅作兜底;正路 = Stop-Widget 显式清场
 [AppDomain]::CurrentDomain.add_ProcessExit({
   try {
+    WLogRaw 'processexit: begin(兜底)'
     [ButlerHost]::Shutdown()
     try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
     foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
@@ -716,7 +746,6 @@ Invoke-Refresh
 if (-not $NoShowIfExists) { [ButlerHost]::Show() }
 if ($script:dockMode -eq 'zcode-right') { [void](Attach-Zcode) }
 [System.Windows.Threading.Dispatcher]::Run()
-# Dispatcher 退出 = 窗口已亡(WM_DESTROY→WM_QUIT;含 owner 关窗随毁)。WebView2 的
-# 非后台线程会吊住进程 → 僵尸占互斥量、后续拉起全失效,必须显式 Exit 让 ProcessExit 清场
-WLog 'dispatcher end, exit'
-[Environment]::Exit(0)
+# Dispatcher 退出 = 窗口已亡(WM_DESTROY→WM_QUIT;含 owner 关窗随毁)。
+# 显式清场后退出(ProcessExit 不触发,见 Stop-Widget 注释)
+Stop-Widget 'dispatcher-end'
