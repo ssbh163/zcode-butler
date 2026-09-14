@@ -63,6 +63,7 @@ Add-Type -Namespace ButlerNative -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
 [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
 [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr h);
+[DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
 [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
 [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 [DllImport("user32.dll")] public static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventProc proc, uint pid, uint idObject, uint flags);
@@ -111,6 +112,7 @@ public static class ButlerHost {
   private static CoreWebView2CompositionController _controller;
   private static Dispatcher _dispatcher;
   private static bool _trackingMouse;
+  private static bool _destroyed;   // WM_DESTROY 已到:窗口亡,此后禁碰 WebView2 控制器(owner 随毁路径实测会 AV 崩溃)
   private static int[] _maskX, _maskY;
   private static int _maskN;
   private static int _fabX, _fabY, _fabR;
@@ -274,7 +276,10 @@ public static class ButlerHost {
   public static void Hide() { ShowWindow(_hwnd, 0); }
   public static void MoveTo(int x, int y) { SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015); }
   public static void Destroy() { if (_hwnd != IntPtr.Zero) { DestroyWindowQuiet(); } }
-  public static void Shutdown() { var c = _controller; if (c != null) { try { c.Close(); } catch { } } }   // 关 WebView2:放掉非后台线程,防进程吊死
+  // 关 WebView2:放掉非后台线程,防进程吊死。窗口已毁(_destroyed)时禁止 Close——
+  // 控制器的合成目标随 HWND 死亡,Close() 触碰死目标会原生 AV(catch 接不住,WER 实测);
+  // 该路径下进程即将 Environment.Exit,WebView2 线程随进程终结,无需 Close
+  public static void Shutdown() { var c = _controller; if (c != null && !_destroyed) { try { c.Close(); } catch { } } }
   private static void DestroyWindowQuiet() { try { SendMessage(_hwnd, 0x0012 /*WM_CLOSE*/, IntPtr.Zero, IntPtr.Zero); } catch { } }
   public static void DragMove() { ReleaseCapture(); SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero); }
   public static void PostJson(string json) {
@@ -351,7 +356,7 @@ public static class ButlerHost {
         }
         return IntPtr.Zero;
       case WM_ERASEBKGND: return (IntPtr)1;
-      case WM_DESTROY: PostQuitMessage(0); return IntPtr.Zero;
+      case WM_DESTROY: _destroyed = true; PostQuitMessage(0); return IntPtr.Zero;
     }
     return DefWindowProc(h, msg, wp, lp);
   }
@@ -570,6 +575,8 @@ function Hook-FollowEvents {
   $script:winEventProc = $proc
   $script:followHooks += [ButlerNative.Win]::SetWinEventHook($EVENT_LOCATIONCHANGE, $EVENT_LOCATIONCHANGE, [IntPtr]::Zero, $proc, [uint32]$script:zcodePid, $OBJID_WINDOW, $WINEVENT_OUTOFCONTEXT)
   $script:followHooks += [ButlerNative.Win]::SetWinEventHook($EVENT_MINIMIZESTART, $EVENT_MINIMIZEEND, [IntPtr]::Zero, $proc, [uint32]$script:zcodePid, $OBJID_WINDOW, $WINEVENT_OUTOFCONTEXT)
+  # SHOW/HIDE:owned window 只随 owner 最小化隐藏,不随 owner 隐藏而隐藏(X 关闭=SW_HIDE,窗口不死)——需自行跟随
+  $script:followHooks += [ButlerNative.Win]::SetWinEventHook($EVENT_OBJECT_SHOW, $EVENT_OBJECT_HIDE, [IntPtr]::Zero, $proc, [uint32]$script:zcodePid, $OBJID_WINDOW, $WINEVENT_OUTOFCONTEXT)
   [ButlerState]::FollowDirty = 1
 }
 function Attach-Zcode {
@@ -605,22 +612,26 @@ function Test-ZcodeAlive {
 }
 
 $EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
+$EVENT_OBJECT_SHOW = 0x8002; $EVENT_OBJECT_HIDE = 0x8003   # ZCode 右上角 X = 窗口隐藏(进程存活),只有这对事件能探到
 $WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
 
 $followTimer = New-Object System.Windows.Threading.DispatcherTimer
 $followTimer.Interval = [TimeSpan]::FromMilliseconds(33)
 $followTimer.Add_Tick({
   if ($script:dockMode -ne 'zcode-right') { return }
-  if ([ButlerState]::FollowDirty -eq 1) {
-    [ButlerState]::FollowDirty = 0
-    if (([int64]$script:zcodeHwnd) -ne 0 -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) {
-      if ([ButlerNative.Win]::IsIconic($script:zcodeHwnd)) { if ([ButlerHost]::Visible) { [ButlerHost]::Hide() } }
-      else {
-        if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() }
-        Position-Follow
+    if ([ButlerState]::FollowDirty -eq 1) {
+      [ButlerState]::FollowDirty = 0
+      if (([int64]$script:zcodeHwnd) -ne 0 -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) {
+        # owner 最小化(IsIconic)或隐藏(X 关闭=SW_HIDE,IsWindowVisible=false)都跟随隐藏;恢复/重开即显示
+        if ([ButlerNative.Win]::IsIconic($script:zcodeHwnd) -or (-not [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd))) {
+          if ([ButlerHost]::Visible) { [ButlerHost]::Hide() }
+        }
+        else {
+          if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() }
+          Position-Follow
+        }
       }
     }
-  }
 })
 $followTimer.Start()
 
@@ -634,6 +645,7 @@ $rescanTimer.Add_Tick({
   try {
     if ($PSCommandPath -and -not (Test-Path $PSCommandPath)) {
       try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
+      [ButlerHost]::Shutdown()   # 先关控制器(窗口尚活),再毁窗——反过来会在 ProcessExit 里 Close 死窗口(AV)
       [ButlerHost]::Destroy()
       [Environment]::Exit(0)
     }
@@ -646,6 +658,10 @@ $rescanTimer.Add_Tick({
     if (-not $alive) {
       Detach-Zcode
       if (Attach-Zcode) { if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() } }
+      elseif ([ButlerHost]::Visible) { [ButlerHost]::Hide() }   # 窗口已亡且找不到新主窗:先藏,待 2.5s 重扫
+    }
+    elseif ([ButlerNative.Win]::IsIconic($script:zcodeHwnd) -or (-not [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd))) {
+      if ([ButlerHost]::Visible) { [ButlerHost]::Hide() }   # 兜底:钩子漏了 SHOW/HIDE 事件时的周期同步(只隐藏,不自动显示,避免和 Ctrl+Shift+G 手动显隐打架)
     }
   } finally { $script:rescanBusy = $false }
 })
@@ -688,7 +704,11 @@ $wakeTimer.Add_Tick({
     $script:lastWake = $wi.LastWriteTimeUtc
     $wake = $true
   }
-  if ($wake -and -not [ButlerHost]::Visible) { [ButlerHost]::Show() }
+  if ($wake -and -not [ButlerHost]::Visible) {
+    # owner 在但处于隐藏态(ZCode X 关闭驻留托盘)时不显示,否则悬浮窗会孤悬桌面
+    $ownerShown = (([int64]$script:zcodeHwnd) -eq 0) -or [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd)
+    if ($ownerShown) { [ButlerHost]::Show() }
+  }
 })
 $wakeTimer.Start()
 
