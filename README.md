@@ -10,7 +10,7 @@ ZCode 插件:智谱 GLM Coding Plan 的**账号用量 + 多 Key 监控 + 会话�
 | 🔔 活动资讯 | ✅ | 资讯条目 + 官方渠道直达,未读管理 |
 | 🪟 悬浮窗 | ✅ | Nothing 风格贴边胶囊(三环+渐进 Key 环+铃铛+小点齿轮),默认吸附 ZCode 窗口右缘实时跟随 |
 
-数据四端同源:悬浮窗 / 斜杠命令 / 对话技能 / 终端 CLI 读同一聚合协议,数字必然一致。悬浮窗随新会话自动拉起(Ctrl+Shift+G 显隐,双击胶囊收起为把手)。
+数据四端同源:悬浮窗 / 斜杠命令 / 对话技能 / 终端 CLI 读同一聚合协议,数字必然一致。悬浮窗随新会话自动拉起(Ctrl+Shift+G 显隐,双击胶囊收起为把手),与 ZCode **同层共生**:吸附主窗右缘实时跟随,被其他窗口遮挡时一同被遮,ZCode 关闭即随退。
 
 ## 快速开始
 
@@ -34,8 +34,9 @@ Chat2Doc 产物默认输出 `~/Desktop/归档/`;格式规则外置在 `plugins/z
 
 - 开发规范与 AI 协作规则 → [AGENTS.md](./AGENTS.md)
 - 设计方案(施工图,含悬浮窗 UI 定稿与 Chat2Doc 流水线)→ [PROJECT.md](./PROJECT.md)
-- 现状解读与变更史(唯一真相源)→ [WIKI.md](./WIKI.md)
-- 开发过程记录 → [DEV RECORD.md](./DEV%20RECORD.md)
+- 现状解读(唯一真相源)→ [WIKI.md](./WIKI.md)
+- 开发过程记录(唯一时间线)→ [开发日志.md](./开发日志.md)
+- 技术选型(知识地图)→ [docs/knowledge/](./docs/knowledge/) · 项目复盘 → [docs/retrospectives/](./docs/retrospectives/)
 - UI 交互原型 → [docs/ui/](./docs/ui/)(浏览器打开 HTML)
 
 ## License

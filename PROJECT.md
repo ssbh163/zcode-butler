@@ -1,6 +1,6 @@
 # zcode-butler(码管家)项目文档
 
-> **文档性质:设计方案(施工图)** —— 开发前编写;开发中冻结,变更走 WIKI 变更史。
+> **文档性质:设计方案(施工图)** —— 开发前编写;开发中冻结,计划变更走《开发日志.md》新 ADR 条目。
 > 版本:v0.1.0 首版设计 · 日期:2026-09-11 · 状态:**待开发**(实施计划见 §11)
 
 ---
@@ -308,7 +308,7 @@ flowchart LR
 
 ```
 zcode-butler/                          ← 仓库根(插件市场)
-├── README.md / AGENTS.md / PROJECT.md / WIKI.md / DEV RECORD.md
+├── README.md / AGENTS.md / PROJECT.md / WIKI.md / 开发日志.md
 ├── marketplace.json (+ .zcode-plugin/ 副本)
 ├── docs/ui/                           ← UI 定稿原型(HTML)
 └── plugins/zcode-butler/
@@ -378,4 +378,4 @@ zcode-butler/                          ← 仓库根(插件市场)
 
 ---
 
-> **关联文档:** 项目宪法 → [AGENTS.md](./AGENTS.md) · 门面 → [README.md](./README.md) · 现状(开发后写)→ [WIKI.md](./WIKI.md) · 过程记录 → [DEV RECORD.md](./DEV%20RECORD.md)
+> **关联文档:** 项目宪法 → [AGENTS.md](./AGENTS.md) · 门面 → [README.md](./README.md) · 现状(开发后写)→ [WIKI.md](./WIKI.md) · 过程记录(唯一时间线,曾用名 DEV RECORD.md)→ [开发日志.md](./开发日志.md)

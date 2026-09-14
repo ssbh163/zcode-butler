@@ -10,15 +10,12 @@ Thumbs.db
 .DS_Store
 desktop.ini
 
-# 私人技术文档(渲染之路复盘,不入库)
-docs/悬浮窗渲染之路.md
-
 # 视觉伴侣/浏览器测试临时产物
 .playwright-mcp/
 "OpenDesign UI/"
 
-# 史料:技术讨论定稿原文(渲染之路的预测侧证据)
-docs/ZCode 插件悬浮窗 UI 技术文档：从 HTML 到原生桌面.md
-
 # UI 作业指导书(私人 SOP)
 docs/UI开发流程.md
+
+# 私人开工清单(不入库)
+docs/新项目准备工作流程.md

@@ -1,11 +1,12 @@
 ﻿#!/usr/bin/env powershell
 # =====================================================================
-# 码管家桌面悬浮窗 v0.3.0(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# 码管家桌面悬浮窗 v0.4.0(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
 # 视觉层 = butler-widget.html(用户定稿 UI,CoreWebView2CompositionController
 #   渲染进 DComp 视觉树,逐像素真透明——边缘 AA/过渡动画/任意背景全部保真)
 # 壳职责:原生 Win32 窗口(WS_EX_NOREDIRECTIONBITMAP) / DComp 树 / 输入转发 /
-#   WM_NCHITTEST 形状掩码穿透 / WinEvent 跟随 ZCode 右缘 / 热键 Ctrl+Shift+G /
-#   单实例互斥 + wake 双通道 / node 拉数;PS 侧只做编排
+#   WM_NCHITTEST 形状掩码穿透 / WinEvent 跟随 ZCode 右缘 / owned 同层(v0.4.0:
+#   GWL_HWNDPARENT 挂 ZCode 主窗,他窗盖 ZCode 时同被盖,ZCode 关闭即随退) /
+#   热键 Ctrl+Shift+G / 单实例互斥 + wake 双通道 / node 拉数;PS 侧只做编排
 # 依赖:vendored webview2/(Core+Wpf 托管 DLL LoadFrom;原生 loader 走 PATH 前置)
 #   + 系统 WebView2 Runtime(缺→mshta 提示并退出)
 # v0.2.x 教训规避(DEV RECORD):窗口化无 alpha/rgn 硬边;WPF 分层窗口连
@@ -69,6 +70,14 @@ public delegate void WinEventProc(IntPtr hHook, uint evt, IntPtr hwnd, int idObj
 [DllImport("user32.dll")] public static extern bool UnhookWinEvent(IntPtr hHook);
 [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
 [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
+[DllImport("user32.dll")] public static extern IntPtr SetWindowLongPtr(IntPtr h, int idx, IntPtr val);
+[DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int idx, int val);
+// GWLP_HWNDPARENT(-8):owner 关系由窗口管理器跨进程托管——owned window 永远在 owner
+// 正上方、随 owner 最小化隐藏、owner 销毁即随毁;32 位进程无 SetWindowLongPtr 导出,按指针宽降级
+public static IntPtr SetOwner(IntPtr h, IntPtr owner) {
+  if (IntPtr.Size == 8) return SetWindowLongPtr(h, -8, owner);
+  return new IntPtr(SetWindowLong(h, -8, owner.ToInt32()));
+}
 '@
 # 跨回调状态:WinEvent delegate 里 $script: 会丢(实测),置脏走 .NET 静态字段
 Add-Type -TypeDefinition 'public static class ButlerState { public static volatile int FollowDirty; }'
@@ -202,8 +211,7 @@ public static class ButlerHost {
     int WS_POPUP = unchecked((int)0x80000000);
     int ex = 0x00200000 /*WS_EX_NOREDIRECTIONBITMAP:真透明的关键,去掉重定向位图*/
            | 0x00000080 /*WS_EX_TOOLWINDOW:不进任务栏/Alt-Tab*/
-           | 0x00000008 /*WS_EX_TOPMOST*/
-           | 0x08000000; /*WS_EX_NOACTIVATE:不抢焦点,输入走合成转发*/
+           | 0x08000000; /*WS_EX_NOACTIVATE:不抢焦点,输入走合成转发;不再置顶——z 序改由 owner 关系托管(v0.4.0):永远在 ZCode 正上方,他窗盖 ZCode 时同被盖*/
     _hwnd = CreateWindowEx(ex, "ButlerWidgetWnd", "ButlerWidget", WS_POPUP, x, y, w, h, IntPtr.Zero, IntPtr.Zero, wc.hInstance, IntPtr.Zero);
     SetWindowText(_hwnd, "ButlerWidget");
     Log("hwnd=0x" + _hwnd.ToString("X") + " size=" + w + "x" + h);
@@ -266,6 +274,7 @@ public static class ButlerHost {
   public static void Hide() { ShowWindow(_hwnd, 0); }
   public static void MoveTo(int x, int y) { SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015); }
   public static void Destroy() { if (_hwnd != IntPtr.Zero) { DestroyWindowQuiet(); } }
+  public static void Shutdown() { var c = _controller; if (c != null) { try { c.Close(); } catch { } } }   // 关 WebView2:放掉非后台线程,防进程吊死
   private static void DestroyWindowQuiet() { try { SendMessage(_hwnd, 0x0012 /*WM_CLOSE*/, IntPtr.Zero, IntPtr.Zero); } catch { } }
   public static void DragMove() { ReleaseCapture(); SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero); }
   public static void PostJson(string json) {
@@ -519,15 +528,19 @@ function Get-ZcodePidHint {
   return 0
 }
 function Find-ZcodeWindow([int]$targetPid) {
+  # 全候选里挑面积最大的:owner 必须是真正的主窗,挂到临时窗(设置弹窗/将亡窗)
+  # 上会被其销毁连带拉死(owner 销毁即随毁,系统语义)
+  $best = [IntPtr]::Zero; $bestArea = 0
   foreach ($candidatePid in @($targetPid) + @(Get-Process -Name 'ZCode' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })) {
     if ($candidatePid -le 0) { continue }
     $p = Get-Process -Id $candidatePid -ErrorAction SilentlyContinue
     if (-not $p -or $p.MainWindowHandle -eq 0) { continue }
     $r = New-Object ButlerNative.Win+RECT
     [ButlerNative.Win]::GetWindowRect($p.MainWindowHandle, [ref]$r) | Out-Null
-    if ((($r.Right - $r.Left) * ($r.Bottom - $r.Top)) -gt 200000) { return $p.MainWindowHandle }
+    $area = ($r.Right - $r.Left) * ($r.Bottom - $r.Top)
+    if ($area -gt $bestArea -and $area -gt 200000) { $best = $p.MainWindowHandle; $bestArea = $area }
   }
-  return [IntPtr]::Zero
+  return $best
 }
 function Get-WidgetHwnd { return [ButlerHost]::Handle }
 function Move-WidgetPhysical([int]$x, [int]$y) { [ButlerHost]::MoveTo($x, $y) }
@@ -571,13 +584,24 @@ function Attach-Zcode {
   $script:zcodeHwnd = $hwnd
   Hook-FollowEvents
   Position-Follow
+  # 挂 owner(GWLP_HWNDPARENT):同层语义——永远在 ZCode 正上方,他窗盖 ZCode 时悬浮窗同被盖;
+  # 最小化/还原、关窗随毁全由系统托管。跨进程合法(owner 关系归窗口管理器,不进宿主进程)
+  try { [void][ButlerNative.Win]::SetOwner((Get-WidgetHwnd), $hwnd) } catch { }
   return $true
 }
 function Detach-Zcode {
   foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
   $script:followHooks = @()
+  try { [void][ButlerNative.Win]::SetOwner((Get-WidgetHwnd), [IntPtr]::Zero) } catch { }
   $script:zcodeHwnd = [IntPtr]::Zero
   $script:zcodePid = 0
+}
+function Test-ZcodeAlive {
+  # 判活的唯一权威信号 = 进程名存在;hostPidFile 只用于"确认活",不用于"判死"
+  # (文件可能陈旧指向已回收的 pid,误判会把活得好好的 ZCode 当成已退出)
+  if (@(Get-Process -Name 'ZCode' -ErrorAction SilentlyContinue).Count -gt 0) { return $true }
+  if ($script:zcodePid -gt 0) { return [bool](Get-Process -Id $script:zcodePid -ErrorAction SilentlyContinue) }
+  return $false
 }
 
 $EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
@@ -600,7 +624,8 @@ $followTimer.Add_Tick({
 })
 $followTimer.Start()
 
-# ZCode 退出退屏右缘 + 低频重扫;脚本被删(插件卸载)自退出
+# 生死绑定(v0.4.0,用户拍板):ZCode 关闭 → 悬浮窗随退,不再退屏独立存活;
+# 窗口句柄丢失先重吸附;脚本被删(插件卸载)自退出
 $rescanTimer = New-Object System.Windows.Threading.DispatcherTimer
 $rescanTimer.Interval = [TimeSpan]::FromMilliseconds(2500)
 $rescanTimer.Add_Tick({
@@ -612,23 +637,15 @@ $rescanTimer.Add_Tick({
       [ButlerHost]::Destroy()
       [Environment]::Exit(0)
     }
+    if (-not (Test-ZcodeAlive)) { [Environment]::Exit(0) }
     if ($script:dockMode -ne 'zcode-right') { return }
+    # owned window 随 owner 销毁:自身句柄失效 = ZCode 主窗已亡(进程还活=窗口重建期),
+    # 退出清场,待下次 SessionStart wake 重拉
+    if (-not [ButlerNative.Win]::IsWindow((Get-WidgetHwnd))) { [Environment]::Exit(0) }
     $alive = (([int64]$script:zcodeHwnd) -ne 0) -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)
     if (-not $alive) {
       Detach-Zcode
       if (Attach-Zcode) { if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() } }
-      else {
-        $wh = Get-WidgetHwnd
-        $screenW = [ButlerNative.Win]::GetSystemMetrics(0)
-        $screenH = [ButlerNative.Win]::GetSystemMetrics(1)
-        if (([int64]$wh) -ne 0) {
-          $wr = New-Object ButlerNative.Win+RECT
-          [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
-          $y = $wr.Top
-          if ($y -lt 0 -or ($y + ($wr.Bottom - $wr.Top)) -gt $screenH) { $y = [int](($screenH - ($wr.Bottom - $wr.Top)) / 2) }
-          Move-WidgetPhysical ($screenW - ($wr.Right - $wr.Left)) $y
-        }
-      }
     }
   } finally { $script:rescanBusy = $false }
 })
@@ -652,6 +669,7 @@ if (Test-Path $posFile) {
 # 进程退出清理(等价旧版 Add_Closing)
 [AppDomain]::CurrentDomain.add_ProcessExit({
   try {
+    [ButlerHost]::Shutdown()
     try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
     foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
     if ($script:nodeProc -and -not $script:nodeProc.HasExited) { try { $script:nodeProc.Kill() } catch { } }
@@ -678,3 +696,7 @@ Invoke-Refresh
 if (-not $NoShowIfExists) { [ButlerHost]::Show() }
 if ($script:dockMode -eq 'zcode-right') { [void](Attach-Zcode) }
 [System.Windows.Threading.Dispatcher]::Run()
+# Dispatcher 退出 = 窗口已亡(WM_DESTROY→WM_QUIT;含 owner 关窗随毁)。WebView2 的
+# 非后台线程会吊住进程 → 僵尸占互斥量、后续拉起全失效,必须显式 Exit 让 ProcessExit 清场
+WLog 'dispatcher end, exit'
+[Environment]::Exit(0)
