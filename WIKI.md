@@ -64,7 +64,7 @@ assets/news.json ──> news.mjs
 ### 6. 悬浮窗(as-built,§4 的实现现状)
 
 - 架构(v0.3.0 起,**合成宿主 = 真逐像素透明**;v0.4.0 起同层):`butler-widget.ps1` 内联 C#(`Add-Type`)宿主——原生 Win32 窗口(`WS_POPUP|WS_EX_NOREDIRECTIONBITMAP|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE`,**不再 WS_EX_TOPMOST**)+ DComp 树(`DCompositionCreateDevice→CreateTargetForHwnd(topmost=TRUE)→CreateVisual→SetRoot`,**`RootVisualTarget` 赋值后必须再 `Commit` 一次**) + `CoreWebView2CompositionController`(DefaultBackgroundColor=Transparent,页面 alpha 原样合成到桌面)。输入:`WM_MOUSE*`→`SendMouseInput`(枚举值=裸 WM 码,Leave=675 特判;滚轮 lParam 屏幕坐标转客户区);光标 `CursorChanged`+WM_SETCURSOR;点击穿透:`WM_NCHITTEST` 按形状掩码(页面 shape 消息的胶囊 810 点+fab 圆)返回 HTCLIENT/HTTRANSPARENT——渲染与命中分离,边缘 AA 保真。PS 侧保留:互斥量/wake/热键/WinEvent 跟随/node 数据链/自存活,窗口操作经 ButlerHost 静态方法(Show/Hide/MoveTo/DragMove)
-- 渲染层:`butler-widget.html` 用户定稿 UI 原样(浏览器级 AA/过渡动画/任意背景全保真);数据桥不变(status.mjs --json → PostWebMessageAsJson → butlerApply;shape 消息上报掩码几何);file:// 防缓存:每次复制随机临时路径加载
+- 渲染层:`butler-widget.html` 用户定稿 UI 原样(浏览器级 AA/过渡动画/任意背景全保真);数据桥不变(status.mjs --json → PostWebMessageAsJson → butlerApply;shape 消息上报掩码几何,**2026-09-15 起全运行时实测零设计坐标常量**——挪动/缩放元素后掩码自动跟随,铁律见 AGENTS.md《三桥铁律》);file:// 防缓存:每次复制随机临时路径加载
 - 依赖关键点:vendored DLL **1.0.4191.47 与系统 Runtime 152.0.4191 配对**(WebView2 Raw 接口 IID 跨 SDK 代不兼容:2739 的 DLL 对 152 运行时报 ICoreWebView2Environment3 cast 失败,实测);原生 loader 仍走 PATH 前置;用户数据目录 `~/.zcode/butler-widget-wv2`
 - 定位与同层(v0.4.0):物理像素域 SetWindowPos;吸附 ZCode 主窗右缘;WinEvent 置脏 → 33ms 节流;**owned window 同层**——`SetOwner`(GWLP_HWNDPARENT=-8,跨进程)挂 ZCode 主窗:永远在 ZCode 正上方、他窗盖 ZCode 时同被盖、最小化/还原/关窗随毁全由系统托管;**生死绑定**(用户拍板):ZCode 进程退出/自身句柄随 owner 失效 → 悬浮窗进程退出,原"退屏右缘独立存活"降级链删除;窗口重建期 2.5s 重扫重吸附;`butler.json widget.dock` 可切
 - 交互:面板拖动(页面 pointerdown→宿主 WM_NCLBUTTONDOWN+HTCAPTION)→ offsetY 记忆;Ctrl+Shift+G 显隐;wake 双通道;fab 悬停气泡含**过渡动画**(合成模式下 v0.2.4 的动画期白闪缺陷不复现)
@@ -104,7 +104,8 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 
 | 版本 | 日期 | 一句话 | commit | 详情(开发日志条目) |
 |---|---|---|---|---|
-| v0.4.0 | 2026-09-13 | 悬浮窗同层(owned window)+ 生死绑定 | ⚠️ 待提交 | 2026-09-13 [调整] v0.4.0 |
+| v0.4.0+ | 2026-09-15 | 形状上报桥锚点实测化(合入免回填,纯重构零行为变化) | 63fd56d | 2026-09-15 [改进] 形状上报桥锚点实测化 |
+| v0.4.0 | 2026-09-13 | 悬浮窗同层(owned window)+ 生死绑定 | 008ceeb | 2026-09-13 [调整] v0.4.0 |
 | v0.3.0 | 2026-09-13 | 合成宿主:真逐像素透明 | 5de0d6b | 2026-09-13 [实现] v0.3.0 |
 | v0.2.5 | 2026-09-13 | 换色就绪 + 透明路线结论(证伪存档) | e1339ca | 2026-09-13 [探索+改进] 任意背景透明路线证伪 |
 | v0.2.4 | 2026-09-13 | 残留白色像素三重根治 | 576f424 | 2026-09-13 [修复] 残留白色像素三重根治 |

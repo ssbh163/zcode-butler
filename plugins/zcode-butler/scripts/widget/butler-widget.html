@@ -497,29 +497,42 @@
         pp = panel.getPointAtLength(d);
         caps.push([sr.left + pp.x * kx, sr.top + pp.y * ky]);
       }
-      function mapF(v) { return [sr.left + (v[0] + 220.5) * kx, sr.top + (v[1] + 1578) * ky]; }
+      /* 三桥铁律:桥内零设计坐标常量——fab 视口映射(.fab rect+viewBox)、
+         描边宽(computed style)、命中圆(.fab-zone rect)全部运行时实测,
+         挪动/缩放 fab 或改描宽后掩码自动跟随,合入无需回填锚点 */
       var band = null, arcCaps = null, bandR = 0, fabC = null, fabR = 0;
       var arc = document.getElementById('arcPath');
       if (arc && arc.getTotalLength) {
         var L = arc.getTotalLength();
         if (L > 0) {
-          var half = 22.3 / 2 + 2.5, outer = [], inner = [], i, t, p, q, dx, dy, ln, nx, ny;
+          var fabBox = document.querySelector('.fab'),
+              fbR = fabBox ? fabBox.getBoundingClientRect() : null,
+              fvb = (arc.ownerSVGElement && arc.ownerSVGElement.viewBox) ? arc.ownerSVGElement.viewBox.baseVal : null,
+              fu = (fbR && fvb && fvb.width) ? fbR.width / fvb.width : 1;
+          var mapF = function (v) {
+            return fbR ? [fbR.left + v[0] * fu, fbR.top + v[1] * fu] : [v[0], v[1]];
+          };
+          var sw = parseFloat(getComputedStyle(arc).strokeWidth) || 0;
+          var half = sw / 2 + 2.5, outer = [], inner = [], i, t, p, q, dx, dy, ln, nx, ny;
           for (i = 0; i <= 64; i++) {
             t = L * i / 64;
             p = arc.getPointAtLength(t);
             q = arc.getPointAtLength(Math.min(L, t + 0.5));
             dx = q.x - p.x; dy = q.y - p.y; ln = Math.hypot(dx, dy) || 1;
             nx = -dy / ln; ny = dx / ln;
-            /* svg(193×193,1:1)左上角 = 舞台(220.5,1578) */
             outer.push([p.x + nx * half, p.y + ny * half]);
             inner.push([p.x - nx * half, p.y - ny * half]);
           }
           var p0 = arc.getPointAtLength(0), p1 = arc.getPointAtLength(L);
           band = outer.concat(inner.reverse()).map(mapF);
           arcCaps = [mapF([p0.x, p0.y]), mapF([p1.x, p1.y])];
-          bandR = half * kx;
-          fabC = [sr.left + 317 * kx, sr.top + 1675 * ky];
-          fabR = 84 * kx;
+          bandR = half * fu;
+          var fabZone = document.querySelector('.fab-zone');
+          if (fabZone) {
+            var fz = fabZone.getBoundingClientRect();
+            fabC = [(fz.left + fz.right) / 2, (fz.top + fz.bottom) / 2];
+            fabR = Math.min(fz.width, fz.height) / 2;
+          }
         }
       }
       try {

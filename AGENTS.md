@@ -77,6 +77,14 @@ py -m unittest discover -s plugins/zcode-butler/scripts/chat2doc -p "*_test.py"
 - 不在 `lib/` 之外的地方直接发智谱 API 请求;不在 .ps1 里写取数逻辑
 - 改 `~/.zcode/` 下 ZCode 自身文件(v2/config.json 等)前必须向用户确认;butler 自有文件除外
 - 回退代码前确认用户已提交
+- 悬浮窗三桥改动不守《三桥铁律》(见下节):形状上报桥出现设计坐标常量即 bug;新增交互面未扩桥(拖动排除+shape 采样)不许交付
+
+## 三桥铁律(butler-widget.html)
+
+- 三桥 = 页面(`chrome.webview` 守卫段)↔ 宿主(`butler-widget.ps1`)的三条通道:数据(ready/data)、拖动(pointerdown→drag)、形状上报(shape→NCHITTEST 掩码)。合入新视觉时桥块原样保留,不因几何变化改动;宿主侧仅消息协议变更时才动
+- **形状上报桥零设计坐标常量**:圆心/半径/描边宽/元素舞台偏移一律运行时实测(`getBoundingClientRect`/`getComputedStyle`/`getPointAtLength`/viewBox),挪动或缩放 fab、改描宽后掩码自动跟随。发现硬编码视为 bug(2026-09-15 锚点实测化改造立此规矩,掩码点数基线 `mask pts=810`)
+- 新增交互面才扩桥:新可见形状加入 shape 采样、新可交互区加入拖动排除(`.fab-zone` 同款),否则点击穿透错位/点按钮变拖窗
+- 合入验收客观信号:`%TEMP%\butler-widget-debug.log` 的 `mask pts=N` 与改前一致(同 UI 结构)
 
 ## 跨平台纪律(Windows ⇄ macOS)
 

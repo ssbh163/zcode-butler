@@ -12,10 +12,10 @@ desktop.ini
 
 # 视觉伴侣/浏览器测试临时产物
 .playwright-mcp/
-"OpenDesign UI/"
+OpenDesign UI/
 
 # UI 作业指导书(私人 SOP)
-docs/UI开发流程.md
+docs/knowledge/UI开发流程.md
 
 # 私人开工清单(不入库)
 docs/新项目准备工作流程.md
