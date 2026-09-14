@@ -74,6 +74,10 @@ public delegate void WinEventProc(IntPtr hHook, uint evt, IntPtr hwnd, int idObj
 [DllImport("user32.dll")] public static extern int GetSystemMetrics(int i);
 [DllImport("user32.dll")] public static extern IntPtr SetWindowLongPtr(IntPtr h, int idx, IntPtr val);
 [DllImport("user32.dll")] public static extern int SetWindowLong(IntPtr h, int idx, int val);
+[DllImport("kernel32.dll")] public static extern IntPtr GetCurrentProcess();
+// 内核级硬终止:Environment.Exit 的 CLR 拆解带 WPF Dispatcher 栈帧+WebView2 原生线程必崩(WER,实测
+// cleanup done 后仍弹窗);显式清理已完成,硬终止无任何拆解代码可崩
+[DllImport("kernel32.dll")] public static extern bool TerminateProcess(IntPtr h, uint exitCode);
 // GWLP_HWNDPARENT(-8):owner 关系由窗口管理器跨进程托管——owned window 永远在 owner
 // 正上方、随 owner 最小化隐藏、owner 销毁即随毁;32 位进程无 SetWindowLongPtr 导出,按指针宽降级
 public static IntPtr SetOwner(IntPtr h, IntPtr owner) {
@@ -637,8 +641,9 @@ function Stop-Widget([string]$reason) {
   if ($script:nodeProc -and -not $script:nodeProc.HasExited) { try { $script:nodeProc.Kill() } catch { } }
   if ($script:pageFile -and (Test-Path $script:pageFile)) { try { Remove-Item -LiteralPath $script:pageFile -ErrorAction SilentlyContinue } catch { } }
   try { $mutex.ReleaseMutex() | Out-Null } catch { }
-  WLog 'exit: cleanup done'
-  [Environment]::Exit(0)
+  WLog 'exit: cleanup done, terminate'
+  [void][ButlerNative.Win]::TerminateProcess([ButlerNative.Win]::GetCurrentProcess(), 0)
+  [Environment]::Exit(0)   # 硬终止失败的理论兜底
 }
 
 $EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
