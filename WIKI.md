@@ -2,7 +2,7 @@
 
 > **活文档:模块现状的唯一真相源(SSOT),纯现在时。** 开发完成后写初版;每次调整直接更新现状解读,历史(发生了什么、怎么变的)一律记 [《开发日志.md》](./开发日志.md)(唯一时间线),本文件不留变更区块。调整前先 commit。
 >
-> 当前状态:**M1-M4 全部交付,悬浮窗至 v0.4.2(退出清理显式化,根治彻底退出 WER 崩溃)**(交互细项待真机人工验收,清单见开发日志 M2 条)。
+> 当前状态:**M1-M4 全部交付,悬浮窗至 v0.4.4(环详情弹窗:悬停显示环浮现用量气泡)**(交互细项待真机人工验收,清单见开发日志 M2 条)。
 
 ---
 
@@ -64,10 +64,10 @@ assets/news.json ──> news.mjs
 ### 6. 悬浮窗(as-built,§4 的实现现状)
 
 - 架构(v0.3.0 起,**合成宿主 = 真逐像素透明**;v0.4.0 起同层):`butler-widget.ps1` 内联 C#(`Add-Type`)宿主——原生 Win32 窗口(`WS_POPUP|WS_EX_NOREDIRECTIONBITMAP|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE`,**不再 WS_EX_TOPMOST**)+ DComp 树(`DCompositionCreateDevice→CreateTargetForHwnd(topmost=TRUE)→CreateVisual→SetRoot`,**`RootVisualTarget` 赋值后必须再 `Commit` 一次**) + `CoreWebView2CompositionController`(DefaultBackgroundColor=Transparent,页面 alpha 原样合成到桌面)。输入:`WM_MOUSE*`→`SendMouseInput`(枚举值=裸 WM 码,Leave=675 特判;滚轮 lParam 屏幕坐标转客户区);光标 `CursorChanged`+WM_SETCURSOR;点击穿透:`WM_NCHITTEST` 按形状掩码(页面 shape 消息的胶囊 810 点+fab 圆)返回 HTCLIENT/HTTRANSPARENT——渲染与命中分离,边缘 AA 保真。PS 侧保留:互斥量/wake/热键/WinEvent 跟随/node 数据链/自存活,窗口操作经 ButlerHost 静态方法(Show/Hide/MoveTo/DragMove)
-- 渲染层:`butler-widget.html` 用户定稿 UI 原样(浏览器级 AA/过渡动画/任意背景全保真);数据桥不变(status.mjs --json → PostWebMessageAsJson → butlerApply;shape 消息上报掩码几何,**2026-09-15 起全运行时实测零设计坐标常量**——挪动/缩放元素后掩码自动跟随,铁律见 AGENTS.md《三桥铁律》);file:// 防缓存:每次复制随机临时路径加载
+- 渲染层:`butler-widget.html` 用户定稿 UI 原样(浏览器级 AA/过渡动画/任意背景全保真);数据桥不变(status.mjs --json → PostWebMessageAsJson → butlerApply;shape 消息上报掩码几何,**2026-09-15 起全运行时实测零设计坐标常量**——挪动/缩放元素后掩码自动跟随,铁律见 AGENTS.md《三桥铁律》);file:// 防缓存:每次复制随机临时路径加载。**环详情弹窗(v0.4.4)**:悬停任一显示环,环左侧浮现带尖角详情气泡(单 SVG path 投影随形 + 十二芒星 logo);弹窗渲染在胶囊左侧桌面区 → 宿主窗口加宽至 ≈577 物理px(纯渲染,弹窗区不在 NCHITTEST 掩码内、页面 pointer-events:none,点击穿透到 ZCode);弹窗文案暂为设计稿演示数据,真实数据分发待接(页面 show(m) 预留分发点)
 - 依赖关键点:vendored DLL **1.0.4191.47 与系统 Runtime 152.0.4191 配对**(WebView2 Raw 接口 IID 跨 SDK 代不兼容:2739 的 DLL 对 152 运行时报 ICoreWebView2Environment3 cast 失败,实测);原生 loader 仍走 PATH 前置;用户数据目录 `~/.zcode/butler-widget-wv2`
 - 定位与同层(v0.4.0;v0.4.1 补跟随与防崩):物理像素域 SetWindowPos;吸附 ZCode 主窗右缘;WinEvent 置脏 → 33ms 节流;**owned window 同层**——`SetOwner`(GWLP_HWNDPARENT=-8,跨进程)挂 ZCode 主窗:永远在 ZCode 正上方、他窗盖 ZCode 时同被盖、最小化/还原/关窗随毁全由系统托管;**owner 隐藏亦跟随**(v0.4.1:X 关闭=SW_HIDE 驻留托盘时 owned window 不自动隐藏,靠 EVENT_OBJECT_SHOW/HIDE 钩子 + IsIconic/!IsWindowVisible 双条件判定 + rescan 兜底);**生死绑定**(用户拍板):ZCode 进程退出/自身句柄随 owner 失效 → 悬浮窗进程退出,原"退屏右缘独立存活"降级链删除;**窗口已毁禁碰 WebView2 控制器**(v0.4.1:WM_DESTROY 置 `_destroyed`,`Shutdown()` 跳过 Close,否则原生 AV→WER"已停止工作"弹窗);窗口重建期 2.5s 重扫重吸附;`butler.json widget.dock` 可切
-- 交互:面板拖动(页面 pointerdown→宿主 WM_NCLBUTTONDOWN+HTCAPTION)→ offsetY 记忆;Ctrl+Shift+G 显隐;wake 双通道;fab 悬停气泡含**过渡动画**(合成模式下 v0.2.4 的动画期白闪缺陷不复现)
+- 交互:面板拖动(页面 pointerdown→宿主 WM_NCLBUTTONDOWN+HTCAPTION)→ offsetY 记忆;Ctrl+Shift+G 显隐;wake 双通道;fab 悬停气泡含**过渡动画**(合成模式下 v0.2.4 的动画期白闪缺陷不复现);悬停显示环 → 环详情弹窗(v0.4.4;注意 SendMessage 合成鼠标消息驱动不了页面 hover,验证需真实光标)
 - 已知限制:C# 宿主内部 SetWindowTextW 不生效之谜未解(标题乱码,截图工具已改按窗口类名找窗,无实害);**拖动手感/点击穿透(月牙区应可点到 ZCode)/键盘输入/跟随移动待真机人工验收**(最小化/恢复已验证 ✓ v0.4.1);运行需系统 WebView2 Runtime 且**版本须与 vendored SDK 同代**(4191 配 152;升级 DLL 时按构建号配对);原生设置卡(归档入口/Key 增删/设置)与资讯面板未在 HTML 内重建;高峰判定用页面本机时间(status.mjs 口径是服务端北京时间,无实害)
 
 ### 7. Chat2Doc 流水线(as-built)
@@ -104,6 +104,7 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 
 | 版本 | 日期 | 一句话 | commit | 详情(开发日志条目) |
 |---|---|---|---|---|
+| v0.4.4 | 2026-09-22 | 环详情弹窗合入:悬停显示环浮现用量气泡,宿主窗口加宽 112→577 物理px | 5cf9bc2 | 2026-09-22 [实现] v0.4.4 |
 | v0.4.3 | 2026-09-15 | 退出终态 TerminateProcess:Exit(0) 的 CLR 拆解本身即崩溃源 | f5aaa4f | 2026-09-15 [修复] v0.4.3 |
 | v0.4.2 | 2026-09-15 | 根治退出崩溃:ProcessExit 实测不触发,退出清理显式化(Stop-Widget) | 17036c6 | 2026-09-15 [修复] v0.4.2 |
 | v0.4.1 | 2026-09-15 | 同层补全:X 关闭跟随隐藏;彻底退出防 WER 崩溃 | fd5391f | 2026-09-15 [修复] v0.4.1 |
