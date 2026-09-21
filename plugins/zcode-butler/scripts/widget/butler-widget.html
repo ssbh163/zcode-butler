@@ -211,9 +211,104 @@
     outline-offset: 3px;
   }
 
+  /* ─── 环详情弹窗:悬停显示环时自左浮现,尖角指向该环中心 ───────
+     气泡体 = 四角圆角矩形主体 + 右侧直边锐角尖角(单条 SVG path,投影随形);
+     主体四角保留圆角,尖角两腰为直线、顶点尖锐无弧度;
+     全部尺寸以舞台像素 × --u 计,与侧栏随窗口高等比缩放。
+     几何:体宽 690 · 体高 548 · 尖角长 84 · 高 118 · 尖角顶点距面板左缘 ≈54 */
+  .usage-pop {
+    position: absolute;
+    left: 0; top: 0;
+    width: calc(var(--u, 0.5px) * 780);
+    height: calc(var(--u, 0.5px) * 548);
+    opacity: 0;
+    transform: translateX(calc(var(--u, 0.5px) * -14));
+    transition: opacity 0.16s ease-out,
+                transform 0.26s cubic-bezier(0.16, 1, 0.3, 1);
+    pointer-events: none;
+    z-index: 6;
+    will-change: opacity, transform;
+  }
+  .usage-pop.on {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  .pop-bubble {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    display: block;
+    overflow: visible;
+    filter: drop-shadow(0 calc(var(--u, 0.5px) * 14) calc(var(--u, 0.5px) * 44) rgba(0, 0, 0, 0.42));
+  }
+  .pop-body {
+    position: absolute;
+    left: 0; top: 0;
+    width: calc(var(--u, 0.5px) * 690);
+    height: 100%;
+    padding: calc(var(--u, 0.5px) * 38) calc(var(--u, 0.5px) * 36) 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .pop-head {
+    display: flex;
+    align-items: center;
+    gap: calc(var(--u, 0.5px) * 18);
+  }
+  .pop-logo {
+    width: calc(var(--u, 0.5px) * 46);
+    height: calc(var(--u, 0.5px) * 46);
+    flex: none;
+  }
+  .pop-logo svg { width: 100%; height: 100%; display: block; }
+  .pop-title {
+    margin: 0;
+    font-size: calc(var(--u, 0.5px) * 44);
+    font-weight: 700;
+    letter-spacing: 0.005em;
+    color: #f7f7f7;
+  }
+  .pop-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-top: calc(var(--u, 0.5px) * 26);
+  }
+  .pop-row.first  { margin-top: calc(var(--u, 0.5px) * 30); }
+  .pop-row.tight  { margin-top: calc(var(--u, 0.5px) * 8); }
+  .pop-label {
+    font-size: calc(var(--u, 0.5px) * 31);
+    font-weight: 600;
+    letter-spacing: 0.005em;
+    color: #f0f0f0;
+  }
+  .pop-sub {
+    font-size: calc(var(--u, 0.5px) * 27);
+    color: #8d8d8d;
+  }
+  .pop-bar {
+    height: calc(var(--u, 0.5px) * 13);
+    border-radius: calc(var(--u, 0.5px) * 6.5);
+    background: #3a3a3a;
+    margin: calc(var(--u, 0.5px) * 15) 0;
+    overflow: hidden;
+  }
+  .pop-bar i { display: block; height: 100%; border-radius: inherit; }
+  .pop-used {
+    font-size: calc(var(--u, 0.5px) * 33);
+    font-weight: 700;
+    letter-spacing: 0.005em;
+    color: #fafafa;
+  }
+  .pop-divider {
+    height: calc(var(--u, 0.5px) * 1.5);
+    background: #262626;
+    margin: calc(var(--u, 0.5px) * 26) 0 calc(var(--u, 0.5px) * 12);
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .fab .disc, .fab .arc, .fab .gear-g { transition: none; }
     body.peak-live .peak-halo { animation: none; }
+    .usage-pop { transition: none; }
   }
 </style>
 </head>
@@ -293,6 +388,45 @@
       </div>
     </div>
 
+  </div>
+
+  <!-- 环详情弹窗:悬停任一显示环时浮现,尖角指向该环;内容 1:1 对齐参考图 -->
+  <div class="usage-pop" id="usagePop" data-od-id="usage-popup" aria-hidden="true">
+    <svg class="pop-bubble" viewBox="0 0 780 548" aria-hidden="true">
+      <path fill="#0a0a0a"
+            d="M34,0 H655.8 Q689.8,0 689.8,34 V215 L774,274 L689.8,333 V514 Q689.8,548 655.8,548 H34 Q0,548 0,514 V34 Q0,0 34,0 Z"/>
+    </svg>
+    <div class="pop-body">
+      <header class="pop-head" data-od-id="popup-head">
+        <span class="pop-logo" data-od-id="popup-logo">
+          <svg viewBox="0 0 44 44" aria-hidden="true">
+            <g id="logoRays" stroke="#f5f5f5" stroke-width="3.2" stroke-linecap="round"></g>
+          </svg>
+        </span>
+        <h2 class="pop-title" data-od-id="popup-title">Claude Usage</h2>
+      </header>
+      <div class="pop-row first" data-od-id="popup-row-session">
+        <span class="pop-label">Current session</span>
+        <span class="pop-sub">Resets Mon 1:09 AM</span>
+      </div>
+      <div class="pop-bar" data-od-id="popup-bar-session"><i style="width: 41%; background: var(--arc-openai);"></i></div>
+      <div class="pop-used" data-od-id="popup-used-session">41% Used</div>
+      <div class="pop-row" data-od-id="popup-row-models">
+        <span class="pop-label">All models</span>
+        <span class="pop-sub">Resets Wed 11:59 PM</span>
+      </div>
+      <div class="pop-bar" data-od-id="popup-bar-models"><i style="width: 60%; background: var(--arc-perplexity);"></i></div>
+      <div class="pop-used" data-od-id="popup-used-models">60% Used</div>
+      <div class="pop-divider" data-od-id="popup-divider"></div>
+      <div class="pop-row" style="margin-top: 0;" data-od-id="popup-row-fe">
+        <span class="pop-label">usage-notch-fe</span>
+        <span class="pop-sub">idle</span>
+      </div>
+      <div class="pop-row tight" data-od-id="popup-row-terminal">
+        <span class="pop-sub">Terminal · usage-notch</span>
+        <span class="pop-sub">4 min</span>
+      </div>
+    </div>
   </div>
 </main>
 
@@ -435,6 +569,75 @@
     }
     apply();
     setInterval(apply, 60000);
+  })();
+
+  /* ── 环详情弹窗:悬停显示环 → 弹窗左侧浮现,尖角指向该环中心。
+      尺寸/间距全部按舞台像素等比(--u = 窗口高 / 2025);
+      ?pop=1(或 #pop)可让弹窗常显在 5h 环旁,便于核对与截图 ── */
+  var FORCE_POP_FOR_PREVIEW = false;   /* 渲染核验用,默认关闭 */
+  (function () {
+    var pop = document.getElementById('usagePop');
+    if (!pop) return;
+    var meters = Array.prototype.slice.call(document.querySelectorAll('.meter'));
+    var TIP_TO_RIGHT = 265;        /* 舞台px:尖角顶点 → 窗口右缘(430 − 165) */
+    var POP_W = 780, POP_H = 548;  /* 舞台px:含尖角的弹窗整体外框 */
+    var showT = 0, hideT = 0, active = null;
+    function place(meter) {
+      var s = window.innerHeight / 2025, r = meter.getBoundingClientRect();
+      var w = POP_W * s, h = POP_H * s;
+      var x = window.innerWidth - TIP_TO_RIGHT * s - w;
+      var y = r.top + r.height / 2 - h / 2;
+      var yMax = window.innerHeight - h - 6;
+      if (y < 6) y = 6; else if (y > yMax) y = yMax;
+      pop.style.setProperty('--u', s + 'px');
+      pop.style.left = x.toFixed(1) + 'px';
+      pop.style.top = y.toFixed(1) + 'px';
+    }
+    function show(meter) {
+      clearTimeout(hideT);
+      active = meter;
+      if (pop.classList.contains('on')) { place(meter); return; }  /* 环间滑动不重播 */
+      clearTimeout(showT);
+      showT = setTimeout(function () { place(meter); pop.classList.add('on'); }, 90);
+    }
+    function hide() {
+      active = null;
+      clearTimeout(showT);
+      clearTimeout(hideT);
+      hideT = setTimeout(function () {
+        if (!FORCE_POP_FOR_PREVIEW && !/[?&]pop=1/.test(location.search) && !/pop/.test(location.hash)) {
+          pop.classList.remove('on');
+        }
+      }, 70);
+    }
+    meters.forEach(function (m) {
+      /* 判定范围 = 整个圆:环本体 + 环内 5h/mcp 字样 + 下方百分比均不丢焦;
+         后续四环弹窗内容各不相同时,在 show(m) 里按 meter 分发对应内容即可 */
+      m.addEventListener('mouseenter', function () { show(m); });
+      m.addEventListener('mouseleave', hide);
+    });
+    window.addEventListener('resize', function () {
+      if (active || FORCE_POP_FOR_PREVIEW) place(active || meters[0]);
+    }, { passive: true });
+    if (FORCE_POP_FOR_PREVIEW || /[?&]pop=1/.test(location.search) || /pop/.test(location.hash)) {
+      requestAnimationFrame(function () { place(meters[0]); pop.classList.add('on'); });
+    }
+  })();
+
+  /* ── 弹窗头部十二芒星标(与参考图 Claude 星芒一致)──────────────── */
+  (function () {
+    var g = document.getElementById('logoRays');
+    if (!g) return;
+    var NS = 'http://www.w3.org/2000/svg', C = 22, R0 = 3.5, R1 = 16;
+    for (var i = 0; i < 12; i++) {
+      var a = i * Math.PI / 6;
+      var l = document.createElementNS(NS, 'line');
+      l.setAttribute('x1', (C + R0 * Math.cos(a)).toFixed(2));
+      l.setAttribute('y1', (C + R0 * Math.sin(a)).toFixed(2));
+      l.setAttribute('x2', (C + R1 * Math.cos(a)).toFixed(2));
+      l.setAttribute('y2', (C + R1 * Math.sin(a)).toFixed(2));
+      g.appendChild(l);
+    }
   })();
 
   /* ── 数据桥:宿主(WebView2 壳)PostWebMessageAsJson → 四环 + Key ──

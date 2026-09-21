@@ -1,6 +1,7 @@
 ﻿#!/usr/bin/env powershell
 # =====================================================================
-# 码管家桌面悬浮窗 v0.4.0(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# 码管家桌面悬浮窗 v0.4.4(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# v0.4.4:窗口加宽容纳环详情弹窗(HTML 侧悬停浮现;弹窗区保持点击穿透)
 # 视觉层 = butler-widget.html(用户定稿 UI,CoreWebView2CompositionController
 #   渲染进 DComp 视觉树,逐像素真透明——边缘 AA/过渡动画/任意背景全部保真)
 # 壳职责:原生 Win32 窗口(WS_EX_NOREDIRECTIONBITMAP) / DComp 树 / 输入转发 /
@@ -378,10 +379,13 @@ public static class ButlerHost {
 [ButlerHost]::DbgPath = $dbgLog
 
 # ---- 窗口尺寸(HTML 舞台 430×2025,面板带宽 ≈211;物理像素直建) ----
+# v0.4.4:窗口加宽至环详情弹窗完整外沿(尖角右留 265 + 弹窗宽 780 + 阴影出血 60,舞台px
+# × 窗高/2025,与 dpr 无关);弹窗区不进 NCHITTEST 掩码——页面 pointer-events:none,
+# 保持 HTTRANSPARENT 点击穿透到 ZCode,窗口加宽只供渲染
 $script:stageH = 600.0
 $dpiScale = 1.75   # 兜底值;实际以 GetDpiForWindow 后的首帧 GetWindowRect 为准由页面 shape 校正
 $script:winH = [int][Math]::Round($script:stageH * $dpiScale)          # ≈1050
-$script:winW = [int][Math]::Ceiling(211.0 * ($script:stageH / 2025.0) * $dpiScale + 2)   # ≈116
+$script:winW = [int][Math]::Ceiling((265.0 + 780.0 + 60.0) * ($script:stageH / 2025.0) * $dpiScale + 4)   # ≈577
 
 # 页面加载:file:// 会被 WebView2 磁盘缓存(实测事故)→ 复制到随机临时路径,正本唯一
 $script:pageFile = Join-Path $env:TEMP ('butler-widget-page-{0}.html' -f [Guid]::NewGuid().ToString('N'))
