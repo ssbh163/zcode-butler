@@ -1,6 +1,11 @@
 ﻿#!/usr/bin/env powershell
 # =====================================================================
-# 码管家桌面悬浮窗 v0.4.4(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# 码管家桌面悬浮窗 v0.4.5(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# v0.4.5:跟随机制整体收敛为一条——C# 侧 WinEvent 回调只 PostMessage,WndProc
+#   里做移动与显隐(规避 WinEvent 重入契约),拖拽无残影;LOCATIONCHANGE→移动,
+#   MINIMIZE/SHOW/HIDE→显隐同步。PS 侧 33ms 跟随定时器、PS WinEvent 钩子、
+#   ButlerState 脏标志全部删除。互斥量换名 -W(旧名句柄会被启动 shell 继承
+#   泄漏成"幽灵持有",新实例全部静默退出)。
 # v0.4.4:窗口加宽容纳环详情弹窗(HTML 侧悬停浮现;弹窗区保持点击穿透)
 # 视觉层 = butler-widget.html(用户定稿 UI,CoreWebView2CompositionController
 #   渲染进 DComp 视觉树,逐像素真透明——边缘 AA/过渡动画/任意背景全部保真)
@@ -21,7 +26,9 @@ $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
 # ---- 单实例互斥量 + 唤醒通道(必须先于耗时初始化) ----
-$mutex = New-Object System.Threading.Mutex($false, 'Global\ZCode-Butler-Widget')
+# v0.4.5 互斥量换名:旧名句柄可能被启动 shell 继承泄漏 → "幽灵持有",
+# 所有新实例走"已有实例"分支静默退出,表现为启动无日志
+$mutex = New-Object System.Threading.Mutex($false, 'Global\ZCode-Butler-Widget-W')
 $ownsMutex = $false
 try { $ownsMutex = $mutex.WaitOne(0) } catch { $ownsMutex = $true }
 if (-not $ownsMutex) {
@@ -86,8 +93,6 @@ public static IntPtr SetOwner(IntPtr h, IntPtr owner) {
   return new IntPtr(SetWindowLong(h, -8, owner.ToInt32()));
 }
 '@
-# 跨回调状态:WinEvent delegate 里 $script: 会丢(实测),置脏走 .NET 静态字段
-Add-Type -TypeDefinition 'public static class ButlerState { public static volatile int FollowDirty; }'
 # PerMonitorV2(句柄 -4):全链物理像素对齐(M2 已验证)
 [void][ButlerNative.Win]::SetProcessDpiAwarenessContext([IntPtr](-4))
 
@@ -292,6 +297,56 @@ public static class ButlerHost {
   public static void Shutdown() { var c = _controller; if (c != null && !_destroyed) { try { c.Close(); } catch { } } }
   private static void DestroyWindowQuiet() { try { SendMessage(_hwnd, 0x0012 /*WM_CLOSE*/, IntPtr.Zero, IntPtr.Zero); } catch { } }
   public static void DragMove() { ReleaseCapture(); SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero); }
+
+  // ---- v0.4.5 帧级跟随:WinEvent 回调 → PostMessage → WndProc 处理 ----
+  // 一套机制管两件事:LOCATIONCHANGE → 移动;MINIMIZE/SHOW/HIDE → 显隐同步。
+  // 回调内禁止同步消息 API(WinEvent 重入契约),只投递,WndProc 里做
+  private const uint WM_APP_FOLLOW2 = 0x8065;
+  private const uint WM_APP_VIS2 = 0x8066;
+  [StructLayout(LayoutKind.Sequential)]
+  private struct BZRECT { public int Left, Top, Right, Bottom; }
+  [DllImport("user32.dll", EntryPoint = "GetWindowRect")] private static extern bool GetWindowRectB(IntPtr h, out BZRECT r);
+  [DllImport("user32.dll", EntryPoint = "GetWindowThreadProcessId")] private static extern uint GetWindowThreadProcessIdB(IntPtr h, out uint pid);
+  [DllImport("user32.dll", EntryPoint = "IsIconic")] private static extern bool IsIconicB(IntPtr h);
+  [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+  private delegate void FollowProc(IntPtr hHook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time);
+  [DllImport("user32.dll", EntryPoint = "SetWinEventHook")] private static extern IntPtr SetWinEventHookB(uint min, uint max, IntPtr mod, FollowProc proc, uint pid, uint idObject, uint flags);
+  [DllImport("user32.dll", EntryPoint = "UnhookWinEvent")] private static extern bool UnhookWinEventB(IntPtr h);
+  [DllImport("user32.dll", EntryPoint = "PostMessageW")] private static extern bool PostMessageB(IntPtr h, uint m, IntPtr w, IntPtr l);
+  private static IntPtr _zHwnd2;
+  private static int _fyOff, _fwW2;
+  private static FollowProc _followProc2;
+  private static IntPtr _locHook2, _minHook2, _visHook2;
+
+  public static void SetFollowParams(IntPtr z, int yOff, int w) { _zHwnd2 = z; _fyOff = yOff; _fwW2 = w; }
+  public static void HookFollowNow() {
+    UnhookFollowNow();
+    if (_zHwnd2 == IntPtr.Zero || _zHwnd2 == _hwnd) return;
+    uint pid2; GetWindowThreadProcessIdB(_zHwnd2, out pid2);
+    _followProc2 = OnWinEvent2;
+    _locHook2 = SetWinEventHookB(0x800B, 0x800B, IntPtr.Zero, _followProc2, pid2, 0, 0);              // LOCATIONCHANGE
+    _minHook2 = SetWinEventHookB(0x0016, 0x0017, IntPtr.Zero, _followProc2, pid2, 0, 0);              // MINIMIZESTART/END
+    _visHook2 = SetWinEventHookB(0x8002, 0x8003, IntPtr.Zero, _followProc2, pid2, 0, 0);              // SHOW/HIDE
+  }
+  public static void UnhookFollowNow() {
+    if (_locHook2 != IntPtr.Zero) { try { UnhookWinEventB(_locHook2); } catch { } _locHook2 = IntPtr.Zero; }
+    if (_minHook2 != IntPtr.Zero) { try { UnhookWinEventB(_minHook2); } catch { } _minHook2 = IntPtr.Zero; }
+    if (_visHook2 != IntPtr.Zero) { try { UnhookWinEventB(_visHook2); } catch { } _visHook2 = IntPtr.Zero; }
+    _followProc2 = null;
+  }
+  private static void OnWinEvent2(IntPtr hHook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time) {
+    try {
+      if (_zHwnd2 == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
+      if (evt == 0x800B) {
+        BZRECT r; GetWindowRectB(_zHwnd2, out r);
+        // 右缘锚定:x = ZCode右缘 - 条宽;y = ZCode顶 + followOffsetY
+        PostMessageB(_hwnd, WM_APP_FOLLOW2, (IntPtr)(r.Right - _fwW2), (IntPtr)(r.Top + _fyOff));
+      } else {
+        // MINIMIZE / SHOW / HIDE → 显隐同步(owned 不随 owner 的 SW_HIDE 隐藏,X 关闭需自行跟)
+        PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);
+      }
+    } catch { }
+  }
   public static void PostJson(string json) {
     var c = _controller;
     if (c != null && c.CoreWebView2 != null) { try { c.CoreWebView2.PostWebMessageAsJson(json); } catch { } }
@@ -360,6 +415,15 @@ public static class ButlerHost {
         }
         break;
       case WM_HOTKEY: if (OnHotKey != null) OnHotKey(); return IntPtr.Zero;
+      case WM_APP_FOLLOW2:
+        SetWindowPos(_hwnd, IntPtr.Zero, wp.ToInt32(), lp.ToInt32(), 0, 0, 0x0015);
+        if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // 跨屏 dpr 重栅格化
+        return IntPtr.Zero;
+      case WM_APP_VIS2:
+        if (_zHwnd2 != IntPtr.Zero) {
+          ShowWindow(_hwnd, (IsIconicB(_zHwnd2) || !IsWindowVisible(_zHwnd2)) ? 0 : 8 /*SW_SHOWNA*/);
+        }
+        return IntPtr.Zero;
       case WM_SIZE:
         if (_controller != null) {
           try { _controller.Bounds = new Rectangle(0, 0, (short)((int)lp & 0xFFFF), (short)(((int)lp >> 16) & 0xFFFF)); } catch { }
@@ -449,6 +513,7 @@ function Push-Data {
             [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
             $script:followOffsetY = $wr.Top - $zr.Top
             Save-Pos
+            try { [ButlerHost]::SetFollowParams($script:zcodeHwnd, [int]$script:followOffsetY, ($wr.Right - $wr.Left)) } catch { }
           }
         }
       } catch { }
@@ -528,13 +593,12 @@ $refreshTimer.Add_Tick({ Invoke-Refresh })
 $refreshTimer.Start()
 
 # =====================================================================
-# 窗口跟随 ZCode 右缘(物理像素域 + WinEvent + 33ms 节流,M2 验证链路)
+# 窗口跟随(v0.4.5:C# 侧 WinEvent 回调 PostMessage → WndProc 帧级处理;
+# PS 侧只剩 吸附/初始定位/生死重扫)
 # =====================================================================
 $script:zcodePid = 0
 $script:zcodeHwnd = [IntPtr]::Zero
-$script:followHooks = @()
 $script:followOffsetY = $null
-$script:winEventProc = $null
 $script:rescanBusy = $false
 
 function Get-ZcodePidHint {
@@ -583,19 +647,6 @@ function Position-Follow {
   $y = $r.Top + [int]$script:followOffsetY
   Move-WidgetPhysical $x $y
 }
-function Hook-FollowEvents {
-  foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
-  $script:followHooks = @()
-  if ($script:zcodePid -eq 0 -or ([int64]$script:zcodeHwnd) -eq 0) { return }
-  # 强转具体委托并长期保活:scriptblock 直传生成临时委托会被 GC
-  $proc = [ButlerNative.Win+WinEventProc]{ param($hHook, $evt, $hwnd, $idObject, $idChild, $thread, $time) [ButlerState]::FollowDirty = 1 }
-  $script:winEventProc = $proc
-  $script:followHooks += [ButlerNative.Win]::SetWinEventHook($EVENT_LOCATIONCHANGE, $EVENT_LOCATIONCHANGE, [IntPtr]::Zero, $proc, [uint32]$script:zcodePid, $OBJID_WINDOW, $WINEVENT_OUTOFCONTEXT)
-  $script:followHooks += [ButlerNative.Win]::SetWinEventHook($EVENT_MINIMIZESTART, $EVENT_MINIMIZEEND, [IntPtr]::Zero, $proc, [uint32]$script:zcodePid, $OBJID_WINDOW, $WINEVENT_OUTOFCONTEXT)
-  # SHOW/HIDE:owned window 只随 owner 最小化隐藏,不随 owner 隐藏而隐藏(X 关闭=SW_HIDE,窗口不死)——需自行跟随
-  $script:followHooks += [ButlerNative.Win]::SetWinEventHook($EVENT_OBJECT_SHOW, $EVENT_OBJECT_HIDE, [IntPtr]::Zero, $proc, [uint32]$script:zcodePid, $OBJID_WINDOW, $WINEVENT_OUTOFCONTEXT)
-  [ButlerState]::FollowDirty = 1
-}
 function Attach-Zcode {
   $script:zcodePid = Get-ZcodePidHint
   if ($script:zcodePid -eq 0) {
@@ -606,16 +657,28 @@ function Attach-Zcode {
   $hwnd = Find-ZcodeWindow $script:zcodePid
   if (([int64]$hwnd) -eq 0) { return $false }
   $script:zcodeHwnd = $hwnd
-  Hook-FollowEvents
   Position-Follow
   # 挂 owner(GWLP_HWNDPARENT):同层语义——永远在 ZCode 正上方,他窗盖 ZCode 时悬浮窗同被盖;
   # 最小化/还原、关窗随毁全由系统托管。跨进程合法(owner 关系归窗口管理器,不进宿主进程)
   try { [void][ButlerNative.Win]::SetOwner((Get-WidgetHwnd), $hwnd) } catch { }
+  # v0.4.5 帧级跟随:LOCATIONCHANGE 回调直接 PostMessage 移动(右缘锚定几何)
+  try {
+    $fy = 40
+    if ($null -ne $script:followOffsetY) { $fy = [int]$script:followOffsetY }
+    $fw = 577
+    $wh0 = Get-WidgetHwnd
+    if (([int64]$wh0) -ne 0) {
+      $wr0 = New-Object ButlerNative.Win+RECT
+      [ButlerNative.Win]::GetWindowRect($wh0, [ref]$wr0) | Out-Null
+      if (($wr0.Right - $wr0.Left) -gt 0) { $fw = $wr0.Right - $wr0.Left }
+    }
+    [ButlerHost]::SetFollowParams($hwnd, $fy, $fw)
+    [ButlerHost]::HookFollowNow()
+  } catch { WLog ('hook-follow THREW: ' + $_.Exception.Message) }
   return $true
 }
 function Detach-Zcode {
-  foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
-  $script:followHooks = @()
+  try { [ButlerHost]::UnhookFollowNow() } catch { }
   try { [void][ButlerNative.Win]::SetOwner((Get-WidgetHwnd), [IntPtr]::Zero) } catch { }
   $script:zcodeHwnd = [IntPtr]::Zero
   $script:zcodePid = 0
@@ -641,7 +704,7 @@ function Stop-Widget([string]$reason) {
   } catch { WLog ('exit: shutdown THREW ' + $_.Exception.Message) }
   try { [ButlerHost]::Destroy() } catch { }
   try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
-  foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
+  try { [ButlerHost]::UnhookFollowNow() } catch { }
   if ($script:nodeProc -and -not $script:nodeProc.HasExited) { try { $script:nodeProc.Kill() } catch { } }
   if ($script:pageFile -and (Test-Path $script:pageFile)) { try { Remove-Item -LiteralPath $script:pageFile -ErrorAction SilentlyContinue } catch { } }
   try { $mutex.ReleaseMutex() | Out-Null } catch { }
@@ -649,30 +712,6 @@ function Stop-Widget([string]$reason) {
   [void][ButlerNative.Win]::TerminateProcess([ButlerNative.Win]::GetCurrentProcess(), 0)
   [Environment]::Exit(0)   # 硬终止失败的理论兜底
 }
-
-$EVENT_MINIMIZESTART = 0x0016; $EVENT_MINIMIZEEND = 0x0017; $EVENT_LOCATIONCHANGE = 0x800B
-$EVENT_OBJECT_SHOW = 0x8002; $EVENT_OBJECT_HIDE = 0x8003   # ZCode 右上角 X = 窗口隐藏(进程存活),只有这对事件能探到
-$WINEVENT_OUTOFCONTEXT = 0x0000; $OBJID_WINDOW = 0
-
-$followTimer = New-Object System.Windows.Threading.DispatcherTimer
-$followTimer.Interval = [TimeSpan]::FromMilliseconds(33)
-$followTimer.Add_Tick({
-  if ($script:dockMode -ne 'zcode-right') { return }
-    if ([ButlerState]::FollowDirty -eq 1) {
-      [ButlerState]::FollowDirty = 0
-      if (([int64]$script:zcodeHwnd) -ne 0 -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) {
-        # owner 最小化(IsIconic)或隐藏(X 关闭=SW_HIDE,IsWindowVisible=false)都跟随隐藏;恢复/重开即显示
-        if ([ButlerNative.Win]::IsIconic($script:zcodeHwnd) -or (-not [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd))) {
-          if ([ButlerHost]::Visible) { [ButlerHost]::Hide() }
-        }
-        else {
-          if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() }
-          Position-Follow
-        }
-      }
-    }
-})
-$followTimer.Start()
 
 # 生死绑定(v0.4.0,用户拍板):ZCode 关闭 → 悬浮窗随退,不再退屏独立存活;
 # 窗口句柄丢失先重吸附;脚本被删(插件卸载)自退出
@@ -726,7 +765,7 @@ if (Test-Path $posFile) {
     WLogRaw 'processexit: begin(兜底)'
     [ButlerHost]::Shutdown()
     try { [void][ButlerNative.Win]::UnregisterHotKey([ButlerHost]::Handle, 0xB001) } catch { }
-    foreach ($h in $script:followHooks) { try { [ButlerNative.Win]::UnhookWinEvent($h) | Out-Null } catch { } }
+    try { [ButlerHost]::UnhookFollowNow() } catch { }
     if ($script:nodeProc -and -not $script:nodeProc.HasExited) { try { $script:nodeProc.Kill() } catch { } }
     if ($script:pageFile -and (Test-Path $script:pageFile)) { try { Remove-Item -LiteralPath $script:pageFile -ErrorAction SilentlyContinue } catch { } }
     $mutex.ReleaseMutex() | Out-Null
