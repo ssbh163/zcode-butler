@@ -1,6 +1,12 @@
 ﻿#!/usr/bin/env powershell
 # =====================================================================
-# 码管家桌面悬浮窗 v0.4.5(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# 码管家桌面悬浮窗 v0.4.6(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# v0.4.6:右侧边栏锚定改为 ZCode 窗口顶 + 窗高/3(距底 2/3);ZCode 窗高容不下侧栏
+#   可见实体时整体隐藏(容纳判定 = 顶边1/3 + 可见底沿 ≤ 窗底,可见底沿按形状掩码
+#   运行实测 ≈912 物理px,即 zcodeH ≥ 1.5×可见高 ≈1368 才显示;形状未到前按整窗
+#   1050 保守),高度恢复自动重现(手动 Ctrl+Shift+G 隐藏不受影响)。旧 followOffsetY
+#   拖动偏移记忆与 pos.json 全套删除(与硬锚定冲突)。HTML 侧 Key 第四环
+#   按已用额度三色(≤60% 绿 / 60–80% 黄 / >80% 红)。
 # v0.4.5:跟随机制整体收敛为一条——C# 侧 WinEvent 回调只 PostMessage,WndProc
 #   里做移动与显隐(规避 WinEvent 重入契约),拖拽无残影;LOCATIONCHANGE→移动,
 #   MINIMIZE/SHOW/HIDE→显隐同步。PS 侧 33ms 跟随定时器、PS WinEvent 钩子、
@@ -43,7 +49,6 @@ $showEvt = New-Object System.Threading.EventWaitHandle($false, [System.Threading
 $dotZcode = Join-Path $env:USERPROFILE '.zcode'
 $wakeFile    = Join-Path $dotZcode 'butler-widget.wake'
 $hostPidFile = Join-Path $dotZcode 'butler-widget-host.json'
-$posFile     = Join-Path $dotZcode 'butler-widget.pos.json'
 $configFile  = Join-Path $dotZcode 'butler.json'
 $statusScript = Join-Path $PSScriptRoot '..\status.mjs'
 if (-not (Test-Path $statusScript)) { $statusScript = Join-Path $PSScriptRoot 'status.mjs' }
@@ -289,7 +294,6 @@ public static class ButlerHost {
 
   public static void Show() { ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
   public static void Hide() { ShowWindow(_hwnd, 0); }
-  public static void MoveTo(int x, int y) { SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015); }
   public static void Destroy() { if (_hwnd != IntPtr.Zero) { DestroyWindowQuiet(); } }
   // 关 WebView2:放掉非后台线程,防进程吊死。窗口已毁(_destroyed)时禁止 Close——
   // 控制器的合成目标随 HWND 死亡,Close() 触碰死目标会原生 AV(catch 接不住,WER 实测);
@@ -298,9 +302,16 @@ public static class ButlerHost {
   private static void DestroyWindowQuiet() { try { SendMessage(_hwnd, 0x0012 /*WM_CLOSE*/, IntPtr.Zero, IntPtr.Zero); } catch { } }
   public static void DragMove() { ReleaseCapture(); SendMessage(_hwnd, WM_NCLBUTTONDOWN, (IntPtr)HTCAPTION, IntPtr.Zero); }
 
-  // ---- v0.4.5 帧级跟随:WinEvent 回调 → PostMessage → WndProc 处理 ----
-  // 一套机制管两件事:LOCATIONCHANGE → 移动;MINIMIZE/SHOW/HIDE → 显隐同步。
-  // 回调内禁止同步消息 API(WinEvent 重入契约),只投递,WndProc 里做
+  // ---- v0.4.5 frame-level follow: WinEvent callback -> PostMessage -> WndProc ----
+  // One mechanism for both: LOCATIONCHANGE -> move; MINIMIZE/SHOW/HIDE -> visibility.
+  // Callback only posts (WinEvent reentrancy contract); WndProc does the work.
+  // v0.4.6: geometry centralized in ApplyFollowGeom — sidebar top edge anchored at
+  // 1/3 of ZCode window height (2/3 from bottom); when the sidebar's VISIBLE extent
+  // (runtime-measured from the shape mask: capsule outline + fab circle; full window
+  // height as conservative fallback before the mask arrives) would overflow the
+  // bottom (zcodeH < 1.5 x visibleH, ~912 phys px today -> threshold ~1368), the
+  // whole widget hides (_sizeHidden) and re-shows automatically once it fits.
+  // Manual Ctrl+Shift+G hide never sets _sizeHidden, so it is not disturbed.
   private const uint WM_APP_FOLLOW2 = 0x8065;
   private const uint WM_APP_VIS2 = 0x8066;
   [StructLayout(LayoutKind.Sequential)]
@@ -314,11 +325,12 @@ public static class ButlerHost {
   [DllImport("user32.dll", EntryPoint = "UnhookWinEvent")] private static extern bool UnhookWinEventB(IntPtr h);
   [DllImport("user32.dll", EntryPoint = "PostMessageW")] private static extern bool PostMessageB(IntPtr h, uint m, IntPtr w, IntPtr l);
   private static IntPtr _zHwnd2;
-  private static int _fyOff, _fwW2;
+  private static int _fwW2;
+  private static bool _sizeHidden;
   private static FollowProc _followProc2;
   private static IntPtr _locHook2, _minHook2, _visHook2;
 
-  public static void SetFollowParams(IntPtr z, int yOff, int w) { _zHwnd2 = z; _fyOff = yOff; _fwW2 = w; }
+  public static void SetFollowParams(IntPtr z, int w) { _zHwnd2 = z; _fwW2 = w; }
   public static void HookFollowNow() {
     UnhookFollowNow();
     if (_zHwnd2 == IntPtr.Zero || _zHwnd2 == _hwnd) return;
@@ -337,15 +349,53 @@ public static class ButlerHost {
   private static void OnWinEvent2(IntPtr hHook, uint evt, IntPtr hwnd, int idObject, int idChild, uint thread, uint time) {
     try {
       if (_zHwnd2 == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
-      if (evt == 0x800B) {
-        BZRECT r; GetWindowRectB(_zHwnd2, out r);
-        // 右缘锚定:x = ZCode右缘 - 条宽;y = ZCode顶 + followOffsetY
-        PostMessageB(_hwnd, WM_APP_FOLLOW2, (IntPtr)(r.Right - _fwW2), (IntPtr)(r.Top + _fyOff));
-      } else {
-        // MINIMIZE / SHOW / HIDE → 显隐同步(owned 不随 owner 的 SW_HIDE 隐藏,X 关闭需自行跟)
-        PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);
-      }
+      // Geometry + visibility are recomputed in WndProc (ApplyFollowGeom) from live
+      // rects; the callback stays post-only (WinEvent reentrancy contract).
+      if (evt == 0x800B) PostMessageB(_hwnd, WM_APP_FOLLOW2, IntPtr.Zero, IntPtr.Zero);
+      else PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);   // MINIMIZE/SHOW/HIDE -> visibility sync
     } catch { }
+  }
+  // v0.4.6 anchor + overflow: top edge = ZCode top + zcodeH/3 (2/3 from bottom).
+  // Fits when zcodeH/3 + visibleH <= zcodeH, i.e. zcodeH >= 1.5 x visibleH;
+  // otherwise hide the whole widget and re-show automatically once it fits again.
+  public static void SyncFollowNow() { ApplyFollowGeom(false); }
+  // Visible bottom edge of the sidebar in window-client physical px, taken from the
+  // runtime shape mask (capsule outline + fab circle) — zero design constants, so
+  // UI moves/resizes keep the fit verdict correct. 0 = shape not reported yet.
+  private static int VisibleBottomLocal() {
+    int b = 0;
+    if (_maskY != null) { for (int i = 0; i < _maskN; i++) { if (_maskY[i] > b) b = _maskY[i]; } }
+    if (_fabR > 0 && _fabY + _fabR > b) b = _fabY + _fabR;
+    return b;
+  }
+  public static bool FollowFits() {
+    if (_hwnd == IntPtr.Zero) return false;
+    if (_zHwnd2 == IntPtr.Zero) return true;   // not attached yet: nothing to overflow against
+    BZRECT z; if (!GetWindowRectB(_zHwnd2, out z)) return true;
+    BZRECT w; if (!GetWindowRectB(_hwnd, out w)) return true;
+    int zh = z.Bottom - z.Top, wh = w.Bottom - w.Top;
+    if (zh <= 0 || wh <= 0) return true;
+    int vis = VisibleBottomLocal(); if (vis <= 0) vis = wh;   // pre-shape: full window, conservative
+    return zh / 3 + vis <= zh;
+  }
+  private static void ApplyFollowGeom(bool showWhenUp) {
+    if (_zHwnd2 == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
+    BZRECT z; if (!GetWindowRectB(_zHwnd2, out z)) return;
+    BZRECT w; if (!GetWindowRectB(_hwnd, out w)) return;
+    int zh = z.Bottom - z.Top, wh = w.Bottom - w.Top;
+    if (zh <= 0 || wh <= 0) return;
+    bool up = !IsIconicB(_zHwnd2) && IsWindowVisible(_zHwnd2);
+    if (!up) { if (IsWindowVisible(_hwnd)) ShowWindow(_hwnd, 0); return; }
+    int vis = VisibleBottomLocal(); if (vis <= 0) vis = wh;   // pre-shape: full window, conservative
+    if (zh / 3 + vis > zh) {
+      // overflow: hide; flag only when we did the hiding (manual hotkey hide stays manual)
+      if (IsWindowVisible(_hwnd)) { ShowWindow(_hwnd, 0); _sizeHidden = true; }
+      return;
+    }
+    int x = z.Right - _fwW2, y = z.Top + zh / 3;
+    SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
+    if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
+    if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
   }
   public static void PostJson(string json) {
     var c = _controller;
@@ -354,6 +404,9 @@ public static class ButlerHost {
   public static void SetHitMask(int[] xs, int[] ys, int n, int fx, int fy, int fr) {
     _maskX = xs; _maskY = ys; _maskN = n; _fabX = fx; _fabY = fy; _fabR = fr;
     Log("mask pts=" + n + " fab=(" + fx + "," + fy + " r" + fr + ")");
+    // Shape landed: visible bottom now known — fit verdict may flip from the
+    // conservative full-window fallback to the real (smaller) visible extent.
+    try { ApplyFollowGeom(false); } catch { }
   }
 
   private static bool MaskHit(int screenX, int screenY) {
@@ -416,13 +469,10 @@ public static class ButlerHost {
         break;
       case WM_HOTKEY: if (OnHotKey != null) OnHotKey(); return IntPtr.Zero;
       case WM_APP_FOLLOW2:
-        SetWindowPos(_hwnd, IntPtr.Zero, wp.ToInt32(), lp.ToInt32(), 0, 0, 0x0015);
-        if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // 跨屏 dpr 重栅格化
+        ApplyFollowGeom(false);   // ZCode move/resize: re-anchor at h/3 + overflow check
         return IntPtr.Zero;
       case WM_APP_VIS2:
-        if (_zHwnd2 != IntPtr.Zero) {
-          ShowWindow(_hwnd, (IsIconicB(_zHwnd2) || !IsWindowVisible(_zHwnd2)) ? 0 : 8 /*SW_SHOWNA*/);
-        }
+        ApplyFollowGeom(true);    // ZCode min/show/hide: visibility sync (fit-aware)
         return IntPtr.Zero;
       case WM_SIZE:
         if (_controller != null) {
@@ -502,27 +552,16 @@ function Push-Data {
     }
     elseif ($msg -like '*ready*') { $script:pageReady = $true; Push-Data }
     elseif ($msg -like '*drag*') {
-      try {
-        [ButlerHost]::DragMove()
-        if (([int64]$script:zcodeHwnd) -ne 0 -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) {
-          $zr = New-Object ButlerNative.Win+RECT
-          [ButlerNative.Win]::GetWindowRect($script:zcodeHwnd, [ref]$zr) | Out-Null
-          $wh = [ButlerHost]::Handle
-          if (([int64]$wh) -ne 0) {
-            $wr = New-Object ButlerNative.Win+RECT
-            [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
-            $script:followOffsetY = $wr.Top - $zr.Top
-            Save-Pos
-            try { [ButlerHost]::SetFollowParams($script:zcodeHwnd, [int]$script:followOffsetY, ($wr.Right - $wr.Left)) } catch { }
-          }
-        }
-      } catch { }
+      # v0.4.6:拖动仅临时挪动,下一次 ZCode 移动/缩放即回 1/3 锚定(位置记忆已删)
+      try { [ButlerHost]::DragMove() } catch { }
     }
   } catch { }
 }
 
 [ButlerHost]::OnHotKey = {
-  if ([ButlerHost]::Visible) { [ButlerHost]::Hide() } else { [ButlerHost]::Show() }
+  # v0.4.6:手动显示也过容纳判定——ZCode 窗高不足时按了也不出现,高度恢复后由跟随自动重现
+  if ([ButlerHost]::Visible) { [ButlerHost]::Hide() }
+  elseif ([ButlerHost]::FollowFits()) { [ButlerHost]::Show() }
 }
 
 # ---- 初始兜底位置(吸附成功时被 Position-Follow 覆盖):贴主屏右缘居中 ----
@@ -598,7 +637,6 @@ $refreshTimer.Start()
 # =====================================================================
 $script:zcodePid = 0
 $script:zcodeHwnd = [IntPtr]::Zero
-$script:followOffsetY = $null
 $script:rescanBusy = $false
 
 function Get-ZcodePidHint {
@@ -629,23 +667,11 @@ function Find-ZcodeWindow([int]$targetPid) {
   return $best
 }
 function Get-WidgetHwnd { return [ButlerHost]::Handle }
-function Move-WidgetPhysical([int]$x, [int]$y) { [ButlerHost]::MoveTo($x, $y) }
+# v0.4.6:几何(右缘 + 1/3 锚定 + 溢出隐藏)统一由 C# ApplyFollowGeom 计算
 function Position-Follow {
   if (([int64]$script:zcodeHwnd) -eq 0) { return }
   if (-not [ButlerNative.Win]::IsWindow($script:zcodeHwnd)) { return }
-  $r = New-Object ButlerNative.Win+RECT
-  [ButlerNative.Win]::GetWindowRect($script:zcodeHwnd, [ref]$r) | Out-Null
-  $wh = Get-WidgetHwnd
-  $wphys = $script:winW
-  if (([int64]$wh) -ne 0) {
-    $wr = New-Object ButlerNative.Win+RECT
-    [ButlerNative.Win]::GetWindowRect($wh, [ref]$wr) | Out-Null
-    if (($wr.Right - $wr.Left) -gt 0) { $wphys = $wr.Right - $wr.Left }
-  }
-  if ($null -eq $script:followOffsetY) { $script:followOffsetY = 40 }
-  $x = $r.Right - $wphys
-  $y = $r.Top + [int]$script:followOffsetY
-  Move-WidgetPhysical $x $y
+  try { [ButlerHost]::SyncFollowNow() } catch { WLog ('position-follow THREW: ' + $_.Exception.Message) }
 }
 function Attach-Zcode {
   $script:zcodePid = Get-ZcodePidHint
@@ -657,14 +683,11 @@ function Attach-Zcode {
   $hwnd = Find-ZcodeWindow $script:zcodePid
   if (([int64]$hwnd) -eq 0) { return $false }
   $script:zcodeHwnd = $hwnd
-  Position-Follow
   # 挂 owner(GWLP_HWNDPARENT):同层语义——永远在 ZCode 正上方,他窗盖 ZCode 时悬浮窗同被盖;
   # 最小化/还原、关窗随毁全由系统托管。跨进程合法(owner 关系归窗口管理器,不进宿主进程)
   try { [void][ButlerNative.Win]::SetOwner((Get-WidgetHwnd), $hwnd) } catch { }
-  # v0.4.5 帧级跟随:LOCATIONCHANGE 回调直接 PostMessage 移动(右缘锚定几何)
+  # v0.4.5 帧级跟随 + v0.4.6 1/3 锚定:回调只投递,几何/显隐在 WndProc ApplyFollowGeom 统一算
   try {
-    $fy = 40
-    if ($null -ne $script:followOffsetY) { $fy = [int]$script:followOffsetY }
     $fw = 577
     $wh0 = Get-WidgetHwnd
     if (([int64]$wh0) -ne 0) {
@@ -672,9 +695,12 @@ function Attach-Zcode {
       [ButlerNative.Win]::GetWindowRect($wh0, [ref]$wr0) | Out-Null
       if (($wr0.Right - $wr0.Left) -gt 0) { $fw = $wr0.Right - $wr0.Left }
     }
-    [ButlerHost]::SetFollowParams($hwnd, $fy, $fw)
+    [ButlerHost]::SetFollowParams($hwnd, $fw)
     [ButlerHost]::HookFollowNow()
   } catch { WLog ('hook-follow THREW: ' + $_.Exception.Message) }
+  # v0.4.6:几何参数(_zHwnd2)就位后才能定位——原先此调用在 SetFollowParams 之前,
+  # C# 侧目标句柄未设置,首次吸附实为 no-op,悬浮窗停在兜底位干等 ZCode 首次移动
+  Position-Follow
   return $true
 }
 function Detach-Zcode {
@@ -733,7 +759,7 @@ $rescanTimer.Add_Tick({
     $alive = (([int64]$script:zcodeHwnd) -ne 0) -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)
     if (-not $alive) {
       Detach-Zcode
-      if (Attach-Zcode) { if (-not [ButlerHost]::Visible) { [ButlerHost]::Show() } }
+      if (Attach-Zcode) { if (-not [ButlerHost]::Visible -and [ButlerHost]::FollowFits()) { [ButlerHost]::Show() } }
       elseif ([ButlerHost]::Visible) { [ButlerHost]::Hide() }   # 窗口已亡且找不到新主窗:先藏,待 2.5s 重扫
     }
     elseif ([ButlerNative.Win]::IsIconic($script:zcodeHwnd) -or (-not [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd))) {
@@ -744,19 +770,9 @@ $rescanTimer.Add_Tick({
 $rescanTimer.Start()
 
 # =====================================================================
-# 位置记忆 / 唤醒 / 启动
+# 唤醒 / 启动
 # =====================================================================
-function Save-Pos {
-  try {
-    @{ followOffsetY = $script:followOffsetY } | ConvertTo-Json | Set-Content -Path $posFile -Encoding ASCII
-  } catch { }
-}
-if (Test-Path $posFile) {
-  try {
-    $pos = Get-Content $posFile -Raw | ConvertFrom-Json
-    if ($pos.followOffsetY) { $script:followOffsetY = [double]$pos.followOffsetY }
-  } catch { }
-}
+# (v0.4.6 删位置记忆:1/3 硬锚定下 followOffsetY 无意义,butler-widget.pos.json 不再读写)
 
 # 进程退出清理(等价旧版 Add_Closing)
 # ProcessExit 实测不触发(见 Stop-Widget 注释),此块仅作兜底;正路 = Stop-Widget 显式清场
@@ -783,9 +799,10 @@ $wakeTimer.Add_Tick({
     $wake = $true
   }
   if ($wake -and -not [ButlerHost]::Visible) {
-    # owner 在但处于隐藏态(ZCode X 关闭驻留托盘)时不显示,否则悬浮窗会孤悬桌面
+    # owner 在但处于隐藏态(ZCode X 关闭驻留托盘)时不显示,否则悬浮窗会孤悬桌面;
+    # v0.4.6:ZCode 窗高容不下侧栏时也不显示(高度恢复后跟随自动重现)
     $ownerShown = (([int64]$script:zcodeHwnd) -eq 0) -or [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd)
-    if ($ownerShown) { [ButlerHost]::Show() }
+    if ($ownerShown -and [ButlerHost]::FollowFits()) { [ButlerHost]::Show() }
   }
 })
 $wakeTimer.Start()

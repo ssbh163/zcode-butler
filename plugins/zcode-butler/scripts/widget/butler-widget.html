@@ -12,6 +12,10 @@
     --arc-claude:   #ce6a47;   /* Claude 橙 */
     --arc-openai:   #7fdca9;   /* OpenAI 绿 */
     --arc-perplexity: #eef67e; /* Perplexity 黄 */
+    /* Key 第四环水位色:已用 ≤60% 绿 / 60–80% 黄 / >80% 红(绿黄沿用色族值,红新增) */
+    --key-ok:   #7fdca9;
+    --key-warn: #eef67e;
+    --key-low:  #ee5c5c;
     --icon:         #f5f5f5;   /* 图标白 */
     --label:        #e2e2e2;   /* 百分比文字 */
     --gear:         #ececec;   /* 齿轮白 */
@@ -358,12 +362,13 @@
         <div class="pct">52%</div>
       </div>
 
-      <!-- Key 显示环:第四环,与前三环同尺寸同间距(中心距 321.5)-->
+      <!-- Key 显示环:第四环,与前三环同尺寸同间距(中心距 321.5);
+           描边按已用额度三色(≤60% 绿 / 60–80% 黄 / >80% 红),数据桥动态切换 -->
       <div class="meter" style="top: 1295px;" data-od-id="meter-key">
         <svg class="ring" viewBox="0 0 135 135" width="135" height="135" aria-hidden="true">
           <circle class="ring-track" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"/>
           <circle class="ring-arc" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"
-                  stroke="var(--label)"/>
+                  stroke="var(--key-ok)"/>
         </svg>
         <span class="glyph" data-od-id="glyph-key">key</span>
         <div class="pct">0/5</div>
@@ -651,10 +656,16 @@
     var pctEl = meter.querySelector('.pct');
     if (!hasData || pct == null) {
       arc.setAttribute('stroke-dasharray', '0 ' + RING_C.toFixed(1));
+      if (odId === 'key') arc.setAttribute('stroke', 'var(--label)');
       pctEl.textContent = '—';
       return;
     }
     var p = Math.max(0, Math.min(100, Number(pct) || 0));
+    if (odId === 'key') {
+      /* Key 环阈值看已用额度:≤60% 绿 / 60–80% 黄 / >80% 红 */
+      arc.setAttribute('stroke', p <= 60 ? 'var(--key-ok)' :
+        p <= 80 ? 'var(--key-warn)' : 'var(--key-low)');
+    }
     arc.setAttribute('stroke-dasharray',
       (RING_C * p / 100).toFixed(1) + ' ' + (RING_C * (1 - p / 100)).toFixed(1));
     pctEl.textContent = Math.round(p) + '%';
@@ -670,6 +681,11 @@
     var top = keys.length ? keys[0] : null;
     butlerSetRing('key', top ? top.pct : null, !!top);
   }
+  /* ?key=NN:强制 Key 环用量预览(三档水位色核验用;宿主 file:// 无查询串,不受影响) */
+  (function () {
+    var m = location.search.match(/[?&]key=(\d+(?:\.\d+)?)/);
+    if (m) butlerSetRing('key', parseFloat(m[1]), true);
+  })();
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', function (e) {
       try {
