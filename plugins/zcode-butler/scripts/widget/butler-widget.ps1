@@ -1,6 +1,12 @@
 ﻿#!/usr/bin/env powershell
 # =====================================================================
-# 码管家桌面悬浮窗 v0.4.6(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# 码管家桌面悬浮窗 v0.4.7(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# v0.4.7:锚点校正——用户参考图像素实测(暗带游程扫描)侧栏中心位于 ZCode 窗高
+#   1/3,v0.4.6 的"窗口顶边锚 1/3"整段偏下 ~87px;改为胶囊中心(形状掩码轮廓
+#   min/maxY 中点,运行时实测)锚 1/3。容纳判定随之改为"中心锚定后整段可见实体
+#   都在窗内":顶侧越出为绑定约束(阈值 = 1.5×胶囊高 ≈1163 物理px;形状未到按
+#   整窗 1575 保守),底侧越出同样判不容纳;隐藏/自动重现/手动隐藏语义不变。
+#   四环水位色从 Key 环扩展到全部四环(已用 ≤60% 绿 / 60–80% 黄 / >80% 红)。
 # v0.4.6:右侧边栏锚定改为 ZCode 窗口顶 + 窗高/3(距底 2/3);ZCode 窗高容不下侧栏
 #   可见实体时整体隐藏(容纳判定 = 顶边1/3 + 可见底沿 ≤ 窗底,可见底沿按形状掩码
 #   运行实测 ≈912 物理px,即 zcodeH ≥ 1.5×可见高 ≈1368 才显示;形状未到前按整窗
@@ -305,12 +311,15 @@ public static class ButlerHost {
   // ---- v0.4.5 frame-level follow: WinEvent callback -> PostMessage -> WndProc ----
   // One mechanism for both: LOCATIONCHANGE -> move; MINIMIZE/SHOW/HIDE -> visibility.
   // Callback only posts (WinEvent reentrancy contract); WndProc does the work.
-  // v0.4.6: geometry centralized in ApplyFollowGeom — sidebar top edge anchored at
-  // 1/3 of ZCode window height (2/3 from bottom); when the sidebar's VISIBLE extent
-  // (runtime-measured from the shape mask: capsule outline + fab circle; full window
-  // height as conservative fallback before the mask arrives) would overflow the
-  // bottom (zcodeH < 1.5 x visibleH, ~912 phys px today -> threshold ~1368), the
-  // whole widget hides (_sizeHidden) and re-shows automatically once it fits.
+  // v0.4.7: geometry centralized in ApplyFollowGeom — the capsule's CENTER (midpoint
+  // of the shape-mask outline vertical extent, runtime-measured) is anchored at
+  // 1/3 of ZCode window height (2/3 from bottom; pixel-verified against the user's
+  // reference image). The sidebar fits when the whole visible extent stays inside
+  // the window after center-anchoring: top side is the binding constraint
+  // (zcodeH >= 1.5 x capsuleH, ~775 phys px today -> threshold ~1163); the bottom
+  // side (incl. the fab circle below) is checked too. Full window height as
+  // conservative fallback before the mask arrives (~1575). Overflow -> the whole
+  // widget hides (_sizeHidden) and re-shows automatically once it fits.
   // Manual Ctrl+Shift+G hide never sets _sizeHidden, so it is not disturbed.
   private const uint WM_APP_FOLLOW2 = 0x8065;
   private const uint WM_APP_VIS2 = 0x8066;
@@ -355,18 +364,23 @@ public static class ButlerHost {
       else PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);   // MINIMIZE/SHOW/HIDE -> visibility sync
     } catch { }
   }
-  // v0.4.6 anchor + overflow: top edge = ZCode top + zcodeH/3 (2/3 from bottom).
-  // Fits when zcodeH/3 + visibleH <= zcodeH, i.e. zcodeH >= 1.5 x visibleH;
-  // otherwise hide the whole widget and re-show automatically once it fits again.
+  // v0.4.7 anchor + overflow: capsule center = ZCode top + zcodeH/3 (2/3 from bottom).
+  // Fits when zcodeH/3 >= halfCapsule (top side, binding) AND the visible bottom
+  // (capsule + fab) stays under 2/3 zcodeH; otherwise hide and auto re-show on fit.
   public static void SyncFollowNow() { ApplyFollowGeom(false); }
-  // Visible bottom edge of the sidebar in window-client physical px, taken from the
-  // runtime shape mask (capsule outline + fab circle) — zero design constants, so
-  // UI moves/resizes keep the fit verdict correct. 0 = shape not reported yet.
-  private static int VisibleBottomLocal() {
-    int b = 0;
-    if (_maskY != null) { for (int i = 0; i < _maskN; i++) { if (_maskY[i] > b) b = _maskY[i]; } }
-    if (_fabR > 0 && _fabY + _fabR > b) b = _fabY + _fabR;
-    return b;
+  // Capsule vertical extent in window-client physical px from the runtime shape-mask
+  // outline (no design constants — UI moves/resizes keep the anchor correct).
+  // Returns false when the shape has not arrived yet; caller falls back to full window.
+  private static bool CapsuleExtent(out int top, out int bottom, int wh) {
+    top = 0; bottom = wh;
+    if (_maskY == null || _maskN < 3) return false;
+    int t = int.MaxValue, b = int.MinValue;
+    for (int i = 0; i < _maskN; i++) {
+      if (_maskY[i] < t) t = _maskY[i];
+      if (_maskY[i] > b) b = _maskY[i];
+    }
+    top = t; bottom = b;
+    return true;
   }
   public static bool FollowFits() {
     if (_hwnd == IntPtr.Zero) return false;
@@ -375,8 +389,12 @@ public static class ButlerHost {
     BZRECT w; if (!GetWindowRectB(_hwnd, out w)) return true;
     int zh = z.Bottom - z.Top, wh = w.Bottom - w.Top;
     if (zh <= 0 || wh <= 0) return true;
-    int vis = VisibleBottomLocal(); if (vis <= 0) vis = wh;   // pre-shape: full window, conservative
-    return zh / 3 + vis <= zh;
+    int cTop, cBot;
+    bool haveShape = CapsuleExtent(out cTop, out cBot, wh);
+    int mid = cTop + (cBot - cTop) / 2;
+    int botVis = cBot;
+    if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
+    return (mid - cTop) <= zh / 3 && (botVis - mid) <= 2 * (zh / 3);
   }
   private static void ApplyFollowGeom(bool showWhenUp) {
     if (_zHwnd2 == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
@@ -386,13 +404,17 @@ public static class ButlerHost {
     if (zh <= 0 || wh <= 0) return;
     bool up = !IsIconicB(_zHwnd2) && IsWindowVisible(_zHwnd2);
     if (!up) { if (IsWindowVisible(_hwnd)) ShowWindow(_hwnd, 0); return; }
-    int vis = VisibleBottomLocal(); if (vis <= 0) vis = wh;   // pre-shape: full window, conservative
-    if (zh / 3 + vis > zh) {
+    int cTop, cBot;
+    bool haveShape = CapsuleExtent(out cTop, out cBot, wh);
+    int mid = cTop + (cBot - cTop) / 2;
+    int botVis = cBot;
+    if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
+    if ((mid - cTop) > zh / 3 || (botVis - mid) > 2 * (zh / 3)) {
       // overflow: hide; flag only when we did the hiding (manual hotkey hide stays manual)
       if (IsWindowVisible(_hwnd)) { ShowWindow(_hwnd, 0); _sizeHidden = true; }
       return;
     }
-    int x = z.Right - _fwW2, y = z.Top + zh / 3;
+    int x = z.Right - _fwW2, y = z.Top + zh / 3 - mid;   // capsule center lands at zcodeH/3
     SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
     if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
     if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
