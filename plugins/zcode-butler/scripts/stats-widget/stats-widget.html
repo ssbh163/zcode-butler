@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>stats</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: transparent;
+    overflow: hidden;
+    user-select: none;
+    cursor: default;
+  }
+  #strip {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;        /* 文字底对齐:窗口底缘锚在可视底边-2px,字底即贴边 */
+    justify-content: center;    /* 以输入框为中心居中(宿主把窗口中心锚到输入框中心) */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "PingFang SC", "Microsoft YaHei UI", "Helvetica Neue",
+                 Arial, sans-serif;
+    font-size: 12px;             /* 定死(用户拍板),不跟随界面字号 */
+    font-weight: 400;            /* 与底栏胶囊文字一致 */
+    color: #D4D4D4;              /* 胶囊文字实测核心色 */
+    white-space: nowrap;
+  }
+  #strip .v { font-variant-numeric: tabular-nums; }
+  #strip .sep { opacity: .55; margin: 0 .45em; }
+  #strip .gap { display: inline-block; width: 2.2em; }
+</style>
+</head>
+<body>
+  <div id="strip">
+    <span>首 token <span class="v" id="ttft">1.44s</span></span><span class="sep">·</span><span>实时 <span class="v" id="tps">108 tok/s</span></span><span class="sep">·</span><span>平均 <span class="v" id="avg">98 tok/s</span></span><span class="gap"></span><span>缓存命中 <span class="v" id="hit">29%</span></span>
+  </div>
+<script>
+  // ---- 假数据(演示):温和漂移;接真数据时由宿主 PostJson 覆盖 ----
+  let ttft = 1.44, tps = 108, avg = 98, hit = 29;
+  function rnd(a, b) { return a + Math.random() * (b - a); }
+  function tick() {
+    ttft = Math.min(2.2, Math.max(0.5, ttft + rnd(-0.1, 0.1)));
+    tps  = Math.min(140, Math.max(50,  tps  + rnd(-6, 6)));
+    avg  = avg + (tps - avg) * 0.1;
+    hit  = Math.min(60,  Math.max(10,  hit  + rnd(-1.5, 1.5)));
+    document.getElementById('ttft').textContent = ttft.toFixed(2) + 's';
+    document.getElementById('tps').textContent  = Math.round(tps) + ' tok/s';
+    document.getElementById('avg').textContent  = Math.round(avg) + ' tok/s';
+    document.getElementById('hit').textContent  = Math.round(hit) + '%';
+  }
+  window.addEventListener('load', () => {
+    try { chrome.webview.postMessage('{"type":"ready"}'); } catch (e) { }
+    setInterval(tick, 2500);
+  });
+</script>
+</body>
+</html>

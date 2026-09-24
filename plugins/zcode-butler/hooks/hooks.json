@@ -11,6 +11,12 @@
           },
           {
             "type": "command",
+            "command": "node \"${ZCODE_PLUGIN_ROOT}/scripts/stats-widget/launch.mjs\"",
+            "timeoutMs": 5000,
+            "statusMessage": "码管家:拉起会话统计条(悬浮窗)"
+          },
+          {
+            "type": "command",
             "command": "node \"${ZCODE_PLUGIN_ROOT}/scripts/status.mjs\" --hook",
             "timeoutMs": 8000,
             "statusMessage": "码管家:注入用量三环/Key 满额/未读资讯摘要"
