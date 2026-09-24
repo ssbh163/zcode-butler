@@ -2,7 +2,7 @@
 
 > **活文档:模块现状的唯一真相源(SSOT),纯现在时。** 开发完成后写初版;每次调整直接更新现状解读,历史(发生了什么、怎么变的)一律记 [《开发日志.md》](./开发日志.md)(唯一时间线),本文件不留变更区块。调整前先 commit。
 >
-> 当前状态:**M1-M4 全部交付,悬浮窗至 v0.4.7(侧栏中心 1/3 锚定 + 容纳不下自动隐藏;四环已用额度三色)**(交互细项待真机人工验收,清单见开发日志 M2 条)。
+> 当前状态:**M1-M4 全部交付,双悬浮窗——用量面板至 v0.4.7(侧栏中心 1/3 锚定 + 容纳不下自动隐藏;四环已用额度三色)+ 会话统计条 v0.10 入库(输入框下空带居中,DWM 底边锚)**(交互细项待真机人工验收,清单见开发日志 M2 条)。
 
 ---
 
@@ -69,6 +69,7 @@ assets/news.json ──> news.mjs
 - 定位与同层(v0.4.0;v0.4.1 补跟随与防崩;v0.4.5 跟随重构;v0.4.7 中心 1/3 锚定+容纳显隐):物理像素域 SetWindowPos;吸附 ZCode 主窗右缘、**胶囊中心 = ZCode 顶 + zcodeH/3(v0.4.7,距底 2/3;中心与范围取形状掩码轮廓运行时实测,几何单点在 C# `ApplyFollowGeom`)**;**容纳判定(v0.4.7)**:中心锚定后整段可见实体(胶囊轮廓+fab 圆)须全在窗内——顶侧越出为绑定约束(阈值 = 1.5×胶囊高,当前 ≈1163 物理px),底侧越出同判;形状未到前按整窗保守(≈1575);`SetHitMask` 收到形状后补算一次——不容纳则整体隐藏并置 `_sizeHidden`,高度恢复由跟随自动重现,手动 Ctrl+Shift+G 隐藏不置位不受干扰,热键显示/wake/重扫均过 `FollowFits()`;**帧级跟随(v0.4.5,C# 侧单一机制)**——ButlerHost 挂 `WINEVENT_OUTOFCONTEXT` 三组钩子共用一个回调:LOCATIONCHANGE→`PostMessage(WM_APP_FOLLOW2)`→WndProc 移动(带 NotifyParentWindowPositionChanged 跨屏重栅格化);MINIMIZE/SHOW/HIDE→`WM_APP_VIS2`→WndProc 查 owner 实时 IsIconic/IsWindowVisible 定显隐(X 关闭=SW_HIDE 驻留托盘时 owned window 不自动隐藏须自行跟);**回调内禁同步消息 API(重入契约)只投递**;旧 33ms 定时器+PS 钩子+ButlerState 脏标志已全套删除,2.5s 重扫仅管生死重吸附;**owned window 同层**——`SetOwner`(GWLP_HWNDPARENT=-8,跨进程)挂 ZCode 主窗:永远在 ZCode 正上方、他窗盖 ZCode 时同被盖、最小化/还原/关窗随毁全由系统托管;**生死绑定**(用户拍板):ZCode 进程退出/自身句柄随 owner 失效 → 悬浮窗进程退出,原"退屏右缘独立存活"降级链删除;**窗口已毁禁碰 WebView2 控制器**(v0.4.1:WM_DESTROY 置 `_destroyed`,`Shutdown()` 跳过 Close,否则原生 AV→WER"已停止工作"弹窗);窗口重建期 2.5s 重扫重吸附;`butler.json widget.dock` 可切;互斥量 `Global\ZCode-Butler-Widget-W`(v0.4.5 换名防句柄继承幽灵持有)
 - 交互:面板拖动(页面 pointerdown→宿主 WM_NCLBUTTONDOWN+HTCAPTION;v0.4.6 起仅临时挪动,下次 ZCode 移动/缩放回 1/3 锚定——offsetY 记忆与 pos.json 已删);Ctrl+Shift+G 显隐(显示侧过容纳判定);wake 双通道;fab 悬停气泡含**过渡动画**(合成模式下 v0.2.4 的动画期白闪缺陷不复现);悬停显示环 → 环详情弹窗(v0.4.4;注意 SendMessage 合成鼠标消息驱动不了页面 hover,验证需真实光标)
 - 已知限制:C# 宿主内部 SetWindowTextW 不生效之谜未解(标题乱码,截图工具已改按窗口类名找窗,无实害);**拖动手感/点击穿透(月牙区应可点到 ZCode)/键盘输入待真机人工验收**(跟随移动已验证 ✓ v0.4.5 用户实机确认零残影;最小化/恢复已验证 ✓ v0.4.1;中心 1/3 锚定与容纳显隐已验证 ✓ v0.4.7 像素扫描对齐参考图 + 程序化缩窗实测);ZCode 窗高不足(当前 < ≈1163 物理px = 1.5×胶囊高)时侧栏整体隐藏、恢复自动重现(v0.4.7);窗高介于 1163–1419 时窗口透明头部越出 ZCode 顶缘,顶部环(5h)悬停弹窗可能渲染到窗外/标题栏上(纯渲染,不在命中掩码内);运行需系统 WebView2 Runtime 且**版本须与 vendored SDK 同代**(4191 配 152;升级 DLL 时按构建号配对);原生设置卡(归档入口/Key 增删/设置)与资讯面板未在 HTML 内重建;高峰判定用页面本机时间(status.mjs 口径是服务端北京时间,无实害)
+- **会话统计条(v0.10 入库,`scripts/stats-widget/`,双悬浮窗之二)**:输入框正下方空带居中一行 `首token · 实时 tok/s · 平均 tok/s ⇢ 缓存命中 %`(12px 定死,**假数据**待接 rollout jsonl)。垂直锚 **DWM 可视帧底边 −8px**——空带实测 35px(=20css 固定内边距,状态无关;窗口矩形含不可见缩放边框,最大化/普通态差 ~8-12px,拿矩形当锚会漂移,v0.10 已修);水平=窗口中心+63(输入框偏心);帧级跟随/整窗穿透/owned 同层/生死绑定同 butler-widget 模式;自启=hooks.json SessionStart→launch.mjs(v0.10 起接管,原 config.json 用户级钩子已删);互斥 `Global\ZCode-Stats-Widget`;webview2 复用 `../widget/webview2`;Ctrl+Alt+S 显隐;配置 `~/.zcode/stats-widget.json`
 
 ### 7. Chat2Doc 流水线(as-built)
 
@@ -104,6 +105,7 @@ py chat2doc/merge_batch.py semi-N.md repl-N.txt batch-N.md
 
 | 版本 | 日期 | 一句话 | commit | 详情(开发日志条目) |
 |---|---|---|---|---|
+| 会话统计条 v0.10 | 2026-09-24 | 入库(双悬浮窗之二):输入框下空带居中,DWM 可视底边锚修状态漂移;SessionStart 钩子接管自启 | 58e6187 | 2026-09-24 [实现] 会话统计条 v0.10 |
 | v0.4.7 | 2026-09-23 | 锚点校正:胶囊中心锚窗高 1/3(像素实测对齐参考图);四环全量已用额度三色 | f733529 | 2026-09-23 [调整] v0.4.7 |
 | v0.4.6 | 2026-09-23 | 侧栏 1/3 锚定 + 容纳不下自动隐藏;Key 环按已用额度三色(≤60 绿 / 60–80 黄 / >80 红) | 8ff926b | 2026-09-23 [实现] v0.4.6 |
 | v0.4.5 | 2026-09-23 | 帧级跟随收敛为单一机制:WinEvent 回调 PostMessage → WndProc(移动+显隐),33ms 定时器全套删除 | 8404dab | 2026-09-23 [重构] v0.4.5 |
