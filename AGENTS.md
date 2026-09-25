@@ -20,13 +20,15 @@ plugins/zcode-butler/
 ├── hooks/hooks.json        ← SessionStart(拉悬浮窗+摘要注入) + UserPromptSubmit(doc-intent)
 ├── assets/news.json        ← 资讯数据(人工维护)
 └── scripts/
-    ├── lib/                ← api(cache/protocol)共享库,usage/watch 共用
+    ├── lib/                ← api(cache/protocol)共享库 + runtime.mjs(staging/孤儿清理)+ widget-common.ps1(双悬浮窗公共机制层)
+    ├── webview2/           ← vendored WebView2 三件套种子(两悬浮窗共享,v0.2.1 从 widget/ 迁出;运行时只从 %LOCALAPPDATA% staging 加载)
     ├── usage.mjs           ← 账号三环(提炼自 zcode-usage)
     ├── watch.mjs           ← Key 月度+水位线(提炼自 zcode-watch)
     ├── news.mjs            ← 资讯(数据源可插拔)
     ├── status.mjs          ← 聚合器:--json 统一协议 / --hook 摘要
     ├── chat2doc/           ← extract / format_batch / merge_batch(.py)
-    └── widget/             ← WPF 悬浮窗 + 启动分发器
+    ├── widget/             ← 用量面板悬浮窗(与 stats-widget 的公共机制在 lib/widget-common.ps1,C# 合成宿主为同构副本:改 A 必改 B)
+    └── stats-widget/       ← 会话统计条悬浮窗(同上)
 ```
 
 ## 插件生命周期纪律(本地 marketplace,v0.2.0 立规)
@@ -66,6 +68,7 @@ node plugins/zcode-butler/scripts/status.mjs --json     # 聚合协议输出(悬
 node plugins/zcode-butler/scripts/status.mjs            # 终端卡片
 node --test "plugins/zcode-butler/scripts/**/*.test.mjs"  # Node 单测(目录形式在 Windows 不可用,须递归 glob)
 py -m unittest discover -s plugins/zcode-butler/scripts/chat2doc -p "*_test.py"
+node -e "const a=require('./marketplace.json').plugins[0].version,b=require('./plugins/zcode-butler/.zcode-plugin/plugin.json').version;a===b?console.log('version 一致:',a):(console.error('version 不一致:',a,b),process.exit(1))"  # 提交前必跑
 ```
 
 安装验证:ZCode → 插件市场 → 本地目录 → 选仓库根;新开对话 `/butler:usage` 应出卡片并拉起悬浮窗。
