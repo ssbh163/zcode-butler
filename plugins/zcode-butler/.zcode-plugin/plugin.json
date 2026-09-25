@@ -1,6 +1,6 @@
 {
   "name": "zcode-butler",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "码管家:智谱 GLM Coding Plan 四合一管家——账号三环用量(5h池/每周/MCP月度)、多 Key 自然月加权监控(高峰×3)、AI 会话归档 Chat2Doc、活动资讯;悬浮窗/命令/对话/CLI 四端同源。",
   "author": {
     "name": "zcode-butler contributors"
