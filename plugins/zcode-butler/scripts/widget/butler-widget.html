@@ -326,53 +326,55 @@
         <path id="panelPath" fill="var(--panel)" d=""/>
       </svg>
 
-      <!-- 5h · 73% · 高峰期(工作日 14–18 点)带橙色光晕 -->
+      <!-- 5h · 高峰期(工作日 14–18 点)带橙色光晕 · 静态空态(首帧值来自 localStorage 快照或保持空,设计稿示例值仅 ?demo=1 调试用) -->
       <div class="meter meter-5h" style="top: 330.5px;" data-od-id="meter-5h">
         <div class="peak-halo" data-od-id="peak-halo-5h" aria-hidden="true"></div>
         <svg class="ring" viewBox="0 0 135 135" width="135" height="135" aria-hidden="true">
           <circle class="ring-track" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"/>
           <circle class="ring-arc" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"
-                  stroke="var(--ring-warn)" transform="rotate(-90 67.5 67.5)"
-                  stroke-dasharray="279.8 103.5"/>
+                  stroke="var(--label)" transform="rotate(-90 67.5 67.5)"
+                  stroke-dasharray="0 383.3"/>
         </svg>
         <span class="glyph" data-od-id="glyph-5h">5h</span>
-        <div class="pct">73%</div>
+        <div class="pct">—</div>
       </div>
 
-      <!-- 7d · 21% -->
+      <!-- 7d · 静态空态(首帧值来自 localStorage 快照) -->
       <div class="meter" style="top: 652px;" data-od-id="meter-7d">
         <svg class="ring" viewBox="0 0 135 135" width="135" height="135" aria-hidden="true">
           <circle class="ring-track" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"/>
           <circle class="ring-arc" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"
-                  stroke="var(--ring-ok)" transform="rotate(-90 67.5 67.5)"
-                  stroke-dasharray="80.5 302.8"/>
+                  stroke="var(--label)" transform="rotate(-90 67.5 67.5)"
+                  stroke-dasharray="0 383.3"/>
         </svg>
         <span class="glyph" data-od-id="glyph-7d">7d</span>
-        <div class="pct">21%</div>
+        <div class="pct">—</div>
       </div>
 
-      <!-- MCP · 52% -->
+      <!-- MCP · 静态空态(首帧值来自 localStorage 快照) -->
       <div class="meter" style="top: 973.5px;" data-od-id="meter-mcp">
         <svg class="ring" viewBox="0 0 135 135" width="135" height="135" aria-hidden="true">
           <circle class="ring-track" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"/>
           <circle class="ring-arc" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"
-                  stroke="var(--ring-ok)" transform="rotate(-90 67.5 67.5)"
-                  stroke-dasharray="199.3 184"/>
+                  stroke="var(--label)" transform="rotate(-90 67.5 67.5)"
+                  stroke-dasharray="0 383.3"/>
         </svg>
         <span class="glyph" data-od-id="glyph-mcp">mcp</span>
-        <div class="pct">52%</div>
+        <div class="pct">—</div>
       </div>
 
       <!-- Key 显示环:第四环,与前三环同尺寸同间距(中心距 321.5);
-           四环描边统一按已用额度三色(≤60% 绿 / 60–80% 黄 / >80% 红),数据桥动态切换 -->
+           四环描边统一按已用额度三色(≤60% 绿 / 60–80% 黄 / >80% 红),数据桥动态切换;
+           静态空态(原设计稿满环+0/5,首帧误导) -->
       <div class="meter" style="top: 1295px;" data-od-id="meter-key">
         <svg class="ring" viewBox="0 0 135 135" width="135" height="135" aria-hidden="true">
           <circle class="ring-track" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"/>
           <circle class="ring-arc" cx="67.5" cy="67.5" r="61" fill="none" stroke-width="13"
-                  stroke="var(--ring-ok)"/>
+                  stroke="var(--label)" transform="rotate(-90 67.5 67.5)"
+                  stroke-dasharray="0 383.3"/>
         </svg>
         <span class="glyph" data-od-id="glyph-key">key</span>
-        <div class="pct">0/5</div>
+        <div class="pct">—</div>
       </div>
     </div>
 
@@ -648,7 +650,7 @@
 
   /* ── 数据桥:宿主(WebView2 壳)PostWebMessageAsJson → 四环 + Key ──
       协议 = status.mjs --json:account.fiveHour/weekly/mcpMonthly.pct + keys[](pct 降序)。
-      浏览器直开(无宿主)时沿用演示数据,便于调 UI。 */
+      浏览器直开(无宿主)默认空态,调 UI 加 ?demo=1 应用设计稿示例值。 */
   var RING_C = 2 * Math.PI * 61;   /* 383.27,与参考图一致 */
   function butlerSetRing(odId, pct, hasData) {
     var meter = document.querySelector('[data-od-id="meter-' + odId + '"]');
@@ -685,11 +687,28 @@
     var m = location.search.match(/[?&]key=(\d+(?:\.\d+)?)/);
     if (m) butlerSetRing('key', parseFloat(m[1]), true);
   })();
+  /* 首帧数据来源(v0.2.2):?demo=1 → 设计稿示例值(调 UI 用);否则 localStorage 快照
+     (上次宿主推送的真值)→ 冷启动首帧即真实值,消灭「设计稿 73% 闪一下才变正常」;
+     两者皆无 → 保持静态空态(—)。真值到达后覆盖并回写快照。 */
+  (function () {
+    if (location.search.match(/[?&]demo=1/)) {
+      butlerSetRing('5h', 73, true); butlerSetRing('7d', 21, true);
+      butlerSetRing('mcp', 52, true); butlerSetRing('key', 34, true);
+      return;
+    }
+    try {
+      var snap = localStorage.getItem('butler-last-data');
+      if (snap) butlerApply(JSON.parse(snap));
+    } catch (err) { }
+  })();
   if (window.chrome && window.chrome.webview) {
     window.chrome.webview.addEventListener('message', function (e) {
       try {
         var msg = e.data;
-        if (msg && msg.type === 'data') butlerApply(msg.payload);
+        if (msg && msg.type === 'data') {
+          butlerApply(msg.payload);
+          try { localStorage.setItem('butler-last-data', JSON.stringify(msg.payload)); } catch (err) { }
+        }
       } catch (err) { }
     });
     window.chrome.webview.postMessage('{"type":"ready"}');
