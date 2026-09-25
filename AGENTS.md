@@ -29,6 +29,18 @@ plugins/zcode-butler/
     └── widget/             ← WPF 悬浮窗 + 启动分发器
 ```
 
+## 插件生命周期纪律(本地 marketplace,v0.2.0 立规)
+
+> 本节是 marketplace.json 的"注释区":**JSON 被 `JSON.parse`+zod `.strict()` 校验,写注释/注释字段会让整个市场解析失败**,所有编辑纪律集中在这里。机制源码级结论详见开发日志 2026-09-25 v0.2.0 条。
+
+- **每次改动必升 version**:`marketplace.json` 的 `plugins[].version` 与 `plugins/zcode-butler/.zcode-plugin/plugin.json` 同步升。directory 源没有 git sha,directory 源唯一更新信号就是 version——不升 = 用户端永远不出更新按钮
+- 更新链路:本仓库 →(marketplace 刷新,每日 ~02:30 自动)→ `~/.zcode/cli/plugins/marketplaces/zcode-plugins-personal/` 镜像 →(UI 点更新,原子换入)→ `…/cache/zcode-plugins-personal/zcode-butler/<版本>/`。**安装/更新的拷贝源是镜像不是本仓库**;手动同步镜像可让更新按钮立即出现
+- 三份副本:仓库(正本)↔ 镜像 ↔ 缓存;改仓库后需手动同步缓存(代码立即生效)与镜像(按钮立即生效),ZCode 只在自动刷新时同步镜像
+- **悬浮窗进程必须对插件缓存目录零句柄**:WebView2 DLL 只从 `%LOCALAPPDATA%\zcode-butler\runtime\webview2\` staging 加载(`scripts/lib/runtime.mjs` 维护)。任何"直接从插件目录 LoadFrom/LoadLibrary/打开文件长持句柄"的新代码都违反本纪律——ZCode 卸载=rm 缓存目录,遇锁 EPERM 且无重试无回滚,必留半删残尸
+- **hook 拉起常驻进程一律走 .vbs 中转**(wscript 的 `WScript.Shell.Run`):exec/hook 链的 Windows Job 会连坐 node 直 spawn 的子进程(秒退 EXIT 0 连脚本都没执行,表象="启动了但没起来")
+- 悬浮窗换代对账:实例 stamp 在 `%LOCALAPPDATA%\zcode-butler\runtime\instance-*.json`,动互斥量逻辑前先读两个 ps1 的 mutex 段注释
+- 卸载后残留仅 `%LOCALAPPDATA%\zcode-butler\`(几 MB,刻意幂等保留);config.json 的 `enabledPlugins` 显式条目永远压过默认启用,卸载会写 `false` 且**重装不清除**——重装后插件"在册但全不加载"先查这里
+
 ## 编码规范
 
 - 零 npm 依赖;测试用 Node 内置 `node:test` 与 Python `unittest`,不引框架
