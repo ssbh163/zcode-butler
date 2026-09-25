@@ -16,9 +16,9 @@ if (process.platform !== 'win32') process.exit(0);
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
 // 运行时卫生(v0.2.0):webview2 同步到 %LOCALAPPDATA% staging(与 widget 共用一份),
-// 收走旧版本孤儿目录。失败不阻塞启动:ps1 侧另有 staging 兜底拷贝。
-const wv2Src = path.join(dir, '..', 'widget', 'webview2');
-try { ensureWebview2Staging(fs.existsSync(wv2Src) ? wv2Src : path.join(dir, 'webview2')); } catch { }
+// 收走旧版本孤儿目录。种子在 scripts/webview2(两悬浮窗共享,v0.2.1 从 widget/ 迁出)。
+// 失败不阻塞启动:ps1 侧另有 staging 兜底拷贝。
+try { ensureWebview2Staging(path.join(dir, '..', 'webview2')); } catch { }
 try { cleanOrphanVersions(dir); } catch { }
 
 // 免黑窗冷启动:必须经 wscript/vbs 中转 —— hook/exec 环境的 Job(kill-on-job-close)

@@ -37,47 +37,16 @@ param(
 $ErrorActionPreference = 'SilentlyContinue'
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 
-# ---- 单实例互斥量 + 唤醒通道(必须先于耗时初始化) ----
-# v0.4.5 互斥量换名:旧名句柄可能被启动 shell 继承泄漏 → "幽灵持有",
-# 所有新实例走"已有实例"分支静默退出,表现为启动无日志
-$mutex = New-Object System.Threading.Mutex($false, 'Global\ZCode-Butler-Widget-W')
-$ownsMutex = $false
-try { $ownsMutex = $mutex.WaitOne(0) } catch { $ownsMutex = $true }
-# v0.2.0 实例盖章:scriptDir 供后来者对账换代,pid 供 stop.ps1 按图索骥
-$stampFile = Join-Path $env:LOCALAPPDATA 'zcode-butler\runtime\instance-widget.json'
-if (-not $ownsMutex) {
-  # v0.2.0 实例对账:已有实例若来自旧版本目录(插件更新换代,stamp.scriptDir ≠ 本目录),
-  # 杀旧上位 —— 否则旧实例会一直活到 ZCode 关闭,新版代码永不生效;顺带清孤儿 node 子进程
-  try {
-    $stamp = Get-Content -LiteralPath $stampFile -Raw | ConvertFrom-Json
-    if ($stamp.scriptDir -and ($stamp.scriptDir -ne $PSScriptRoot) -and $stamp.pid) {
-      $old = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$stamp.pid)" -ErrorAction SilentlyContinue
-      if ($old -and $old.CommandLine -match 'butler-widget\.ps1') {
-        Stop-Process -Id $old.ProcessId -Force -ErrorAction SilentlyContinue
-        Get-CimInstance Win32_Process -Filter "Name='node.exe'" -ErrorAction SilentlyContinue | Where-Object {
-          $_.CommandLine -match 'zcode-plugins-personal\\zcode-butler' -and $_.CommandLine -match 'status\.mjs'
-        } | Stop-Process -Force -ErrorAction SilentlyContinue
-        foreach ($i in 1..30) {   # 等旧实例终命释放互斥量,最多 ~3s
-          Start-Sleep -Milliseconds 100
-          try { $ownsMutex = $mutex.WaitOne(0) } catch { $ownsMutex = $true }
-          if ($ownsMutex) { break }
-        }
-      }
-    }
-  } catch { }
-}
+# ---- 单实例互斥 + 换代对账 + 唤醒通道(公共层,必须先于耗时初始化) ----
+. (Join-Path $PSScriptRoot '..\lib\widget-common.ps1')
+$ownsMutex = Request-ButlerSingleInstance -MutexName 'Global\ZCode-Butler-Widget-W' -Kind 'widget' `
+  -ScriptDir $PSScriptRoot -ProcessMatch 'butler-widget\.ps1' -NodeMatch 'zcode-plugins-personal\\zcode-butler'
 if (-not $ownsMutex) {
   if (-not $NoShowIfExists) {
     try { [System.Threading.EventWaitHandle]::OpenExisting('Global\ZCode-Butler-Widget-Show').Set() | Out-Null } catch { }
   }
   exit
 }
-try {
-  $stampDir = Split-Path $stampFile -Parent
-  if (-not (Test-Path $stampDir)) { New-Item -ItemType Directory -Path $stampDir -Force | Out-Null }
-  @{ scriptDir = $PSScriptRoot; pid = $PID; ts = (Get-Date).ToString('o') } |
-    ConvertTo-Json -Compress | Set-Content -LiteralPath $stampFile -Encoding ASCII
-} catch { }
 $showEvt = New-Object System.Threading.EventWaitHandle($false, [System.Threading.EventResetMode]::AutoReset, 'Global\ZCode-Butler-Widget-Show')
 
 # ---- 路径与配置 ----
@@ -136,18 +105,10 @@ public static IntPtr SetOwner(IntPtr h, IntPtr owner) {
 # PerMonitorV2(句柄 -4):全链物理像素对齐(M2 已验证)
 [void][ButlerNative.Win]::SetProcessDpiAwarenessContext([IntPtr](-4))
 
-# v0.2.0 staging 运行时:DLL 只从 %LOCALAPPDATA% 加载,进程对插件缓存目录零句柄 →
+# v0.2.0 staging 运行时(公共层):DLL 只从 %LOCALAPPDATA% 加载,进程对插件缓存零句柄 →
 # ZCode 卸载 rm / 同版本原子换入不再撞 WebView2 DLL 锁(EPERM,见开发日志)。
-# launch.mjs 已做 sha256 增量同步;此处兜底「staging 被清空 / 手动直跑」,拷贝失败
-# (旧实例正加载该 DLL)则沿用 staging 旧文件,换代后下次会话自动追平。
-$wv2Src = Join-Path $PSScriptRoot 'webview2'
-$wv2Dir = Join-Path $env:LOCALAPPDATA 'zcode-butler\runtime\webview2'
-if (-not (Test-Path (Join-Path $wv2Dir 'Microsoft.Web.WebView2.Core.dll'))) {
-  New-Item -ItemType Directory -Path $wv2Dir -Force | Out-Null
-  foreach ($dll in 'Microsoft.Web.WebView2.Core.dll', 'Microsoft.Web.WebView2.Wpf.dll', 'WebView2Loader.dll') {
-    try { Copy-Item -LiteralPath (Join-Path $wv2Src $dll) -Destination (Join-Path $wv2Dir $dll) -Force -ErrorAction Stop } catch { }
-  }
-}
+# 种子在 scripts/webview2(两悬浮窗共享,v0.2.1 从 widget/ 迁出)。
+$wv2Dir = Initialize-ButlerWebview2Staging -SeedDir (Join-Path $PSScriptRoot '..\..\webview2')
 # 原生 WebView2Loader.dll 由 LoadLibrary 经 PATH 解析(.NET Framework 不探测 LoadFrom 程序集目录)
 $env:PATH = $wv2Dir + ';' + $env:PATH
 $asmCore = [System.Reflection.Assembly]::LoadFrom((Join-Path $wv2Dir 'Microsoft.Web.WebView2.Core.dll'))

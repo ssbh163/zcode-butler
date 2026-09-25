@@ -23,8 +23,9 @@ const dotZcode = path.join(os.homedir(), '.zcode');
 
 // 0. 运行时卫生(v0.2.0):webview2 三件套同步到 %LOCALAPPDATA% staging(悬浮窗只从
 //    staging 加载 DLL → 对插件缓存零句柄,ZCode 卸载 rm/同版本原子换入不再撞锁);
-//    顺带收走 ZCode 更新后遗留的旧版本孤儿目录。失败不阻塞启动:ps1 侧另有 staging 兜底。
-try { ensureWebview2Staging(path.join(dir, 'webview2')); } catch { }
+//    种子在 scripts/webview2(两悬浮窗共享,v0.2.1 从 widget/ 迁出);顺带收走 ZCode
+//    更新后遗留的旧版本孤儿目录。失败不阻塞启动:ps1 侧另有 staging 兜底拷贝。
+try { ensureWebview2Staging(path.join(dir, '..', 'webview2')); } catch { }
 try { cleanOrphanVersions(dir); } catch { }
 
 // 1. 唤醒文件

@@ -1,26 +1,5 @@
-$host.ui.RawUI.WindowTitle = 'stats-widget-stop'
-Add-Type -Namespace SW -Name N -MemberDefinition @'
-[DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
-public delegate bool EnumProc(IntPtr h, IntPtr l);
-[DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
-[DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern int GetClassNameW(IntPtr h, System.Text.StringBuilder s, int n);
-'@
-$targets = @()
-$cb = [SW.N+EnumProc]{ param($h, $l)
-  $sb = New-Object System.Text.StringBuilder 256
-  [void][SW.N]::GetClassNameW($h, $sb, 256)
-  if ($sb.ToString() -eq 'StatsWidgetWnd') {
-    $script:targets += $h
-  }
-  return $true
-}
-[void][SW.N]::EnumWindows($cb, [IntPtr]::Zero)
-if (-not $targets) { Write-Output 'not running'; exit }
-foreach ($h in $targets) {
-  $pid2 = 0
-  [void][SW.N]::GetWindowThreadProcessId($h, [ref]$pid2)
-  if ($pid2 -and $pid2 -ne $PID) {
-    Stop-Process -Id $pid2 -Force -ErrorAction SilentlyContinue
-    Write-Output ("killed pid " + $pid2)
-  }
-}
+﻿$host.ui.RawUI.WindowTitle = 'stats-widget-stop'
+# v0.2.1:与 widget/stop.ps1 同机制(旧版窗口枚举式废弃 —— 只覆盖「窗口活着」状态,
+# 启动早期未建窗/窗口已毁进程未退时假阴性报 not running;详见开发日志 v0.2.1)
+. (Join-Path $PSScriptRoot '..\lib\widget-common.ps1')
+Stop-ButlerInstance -Kind 'stats' -ProcessMatch 'stats-widget\.ps1'
