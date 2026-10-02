@@ -1,6 +1,14 @@
 ﻿#!/usr/bin/env powershell
 # =====================================================================
-# 码管家桌面悬浮窗 v0.6.13(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# 码管家桌面悬浮窗 v0.6.18(PowerShell 5.1+ / 内联 C# 合成宿主 + WebView2)
+# v0.6.18 手动显隐持久化(#2:Ctrl+Shift+G 隐藏后,侧边继续对话导致面板再次显示):
+#   根因:SessionStart 每会话跑 widget-launch.mjs(touch wake 文件 + 新实例置
+#   Show 事件双通道),wakeTimer、VIS2 跟随(ApplyFollowGeom showWhenUp)、重吸附、
+#   冷启动四条显示路径均不感知手动意愿。
+#   修法:userHidden 持久态 ~/.zcode/butler-widget-ui.json(热键隐藏置位/显示清位;
+#   Get-ButlerUserHidden fail-open,状态文件异常绝不反向锁死面板),四路径全门控;
+#   C# 侧 SetUserHidden 同步静态位门控 VIS2。恢复显示 = 再按一次 Ctrl+Shift+G。
+#   测试:scripts/widget/widget-fix.test.mjs(单测 + BUTLER_E2E=1 活体端到端)。
 # v0.6.15(HTML 引擎重做 + 宿主主题通道;性能审查实测渲染器核 CPU 104% 后治理):
 #   ①星空粒子路径预采样 512 点查找表,每帧 O(1) 查表替代 getPointAtLength
 #     (原 ~7000 次/秒长路径贝塞尔求值是最大成本);②30fps 帧闸;③粒子加大
@@ -162,6 +170,9 @@ function WLogRaw($m) { try { [IO.File]::AppendAllText($dbgLog, [DateTime]::Now.T
 
 $script:dockMode = 'zcode-right'
 $script:refreshMinutes = 110
+# v0.6.18:手动显隐持久态文件(Ctrl+Shift+G 隐藏置位/显示清位;Get/Set-ButlerUserHidden
+# 在 lib/widget-common.ps1,读取 fail-open)。四条自动显示路径共用此门控。
+$script:uiStateFile = Join-Path $dotZcode 'butler-widget-ui.json'
 try {
   $c = Get-Content $configFile -Raw | ConvertFrom-Json
   if ($c -and $c.widget) {
@@ -459,10 +470,12 @@ public static class ButlerHost {
   private static IntPtr _zHwnd2;
   private static int _fwW2;
   private static bool _sizeHidden;
+  private static bool _userHidden;   // v0.6.18:Ctrl+Shift+G 手动隐藏持久位(PS 侧文件为准,此处只门控 VIS2 类自动显示)
   private static FollowProc _followProc2;
   private static IntPtr _locHook2, _minHook2, _visHook2;
 
   public static void SetFollowParams(IntPtr z, int w) { _zHwnd2 = z; _fwW2 = w; }
+  public static void SetUserHidden(bool v) { _userHidden = v; }
   public static void HookFollowNow() {
     UnhookFollowNow();
     if (_zHwnd2 == IntPtr.Zero || _zHwnd2 == _hwnd) return;
@@ -544,7 +557,9 @@ public static class ButlerHost {
     int x = z.Right - _fwW2, y = z.Top + zh / 3 - mid;   // capsule center lands at zcodeH/3
     SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
     if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
-    if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
+    // v0.6.18:_userHidden 门控两条自动重现(sizeHidden 恢复 + VIS2 showWhenUp)——
+    // 手动 Ctrl+Shift+G 隐藏不被 ZCode 显隐事件/高度恢复唤回(恢复显示只走热键)
+    if ((showWhenUp || _sizeHidden) && !_userHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
   }
   public static void PostJson(string json) {
     var c = _controller;
@@ -675,6 +690,10 @@ public static class ButlerHost {
 '@ -ReferencedAssemblies @('System.dll', ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'System.Drawing' } | Select-Object -First 1).Location, ([AppDomain]::CurrentDomain.GetAssemblies() | Where-Object { $_.GetName().Name -eq 'WindowsBase' } | Select-Object -First 1).Location, ($asmCore.Location))
 [ButlerHost]::Log = { param($s) WLog $s }
 [ButlerHost]::DbgPath = $dbgLog
+# v0.6.18:启动即同步手动隐藏位(冷启动 Show 与 C# VIS2 门控都看它)
+$script:userHidden = Get-ButlerUserHidden -Path $script:uiStateFile
+[ButlerHost]::SetUserHidden($script:userHidden)
+WLog ('boot: userHidden=' + $script:userHidden)
 
 # ---- 窗口尺寸(HTML 舞台 430×2025,面板带宽 ≈211;物理像素直建) ----
 # v0.4.4:窗口加宽至环详情弹窗完整外沿(尖角右留 265 + 弹窗宽 780 + 阴影出血 60,舞台px
@@ -787,8 +806,22 @@ function Push-Data {
 
 [ButlerHost]::OnHotKey = {
   # v0.4.6:手动显示也过容纳判定——ZCode 窗高不足时按了也不出现,高度恢复后由跟随自动重现
-  if ([ButlerHost]::Visible) { [ButlerHost]::Hide() }
-  elseif ([ButlerHost]::FollowFits()) { [ButlerHost]::Show() }
+  # v0.6.18:手动显隐落盘 userHidden(隐藏置位=拦下此后全部自动显示;显示清位)。
+  #   落盘失败静默降级 = 仅本次进程内隐藏(等价旧行为),不挡翻转本身。
+  if ([ButlerHost]::Visible) {
+    [ButlerHost]::Hide()
+    [void](Set-ButlerUserHidden $true -Path $script:uiStateFile)
+    [ButlerHost]::SetUserHidden($true)
+    $script:userHidden = $true
+    WLog 'hotkey: hide (userHidden=true)'
+  }
+  elseif ([ButlerHost]::FollowFits()) {
+    [ButlerHost]::Show()
+    [void](Set-ButlerUserHidden $false -Path $script:uiStateFile)
+    [ButlerHost]::SetUserHidden($false)
+    $script:userHidden = $false
+    WLog 'hotkey: show (userHidden=false)'
+  }
 }
 
 # ---- 初始兜底位置(吸附成功时被 Position-Follow 覆盖):贴主屏右缘居中 ----
@@ -1083,7 +1116,10 @@ $rescanTimer.Add_Tick({
     $alive = (([int64]$script:zcodeHwnd) -ne 0) -and [ButlerNative.Win]::IsWindow($script:zcodeHwnd)
     if (-not $alive) {
       Detach-Zcode
-      if (Attach-Zcode) { if (-not [ButlerHost]::Visible -and [ButlerHost]::FollowFits()) { [ButlerHost]::Show() } }
+      if (Attach-Zcode) {
+        # v0.6.18:重吸附自动重现也过 userHidden 门(手动隐藏不被 ZCode 窗口重建唤回)
+        if (-not [ButlerHost]::Visible -and [ButlerHost]::FollowFits() -and -not (Get-ButlerUserHidden -Path $script:uiStateFile)) { [ButlerHost]::Show() }
+      }
       elseif ([ButlerHost]::Visible) { [ButlerHost]::Hide() }   # 窗口已亡且找不到新主窗:先藏,待 2.5s 重扫
     }
     elseif ([ButlerNative.Win]::IsIconic($script:zcodeHwnd) -or (-not [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd))) {
@@ -1133,16 +1169,23 @@ $wakeTimer.Add_Tick({
     $wake = $true
   }
   if ($wake -and -not [ButlerHost]::Visible) {
-    # owner 在但处于隐藏态(ZCode X 关闭驻留托盘)时不显示,否则悬浮窗会孤悬桌面;
-    # v0.4.6:ZCode 窗高容不下侧栏时也不显示(高度恢复后跟随自动重现)
-    $ownerShown = (([int64]$script:zcodeHwnd) -eq 0) -or [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd)
-    if ($ownerShown -and [ButlerHost]::FollowFits()) { [ButlerHost]::Show() }
+    # v0.6.18:userHidden 门控——wake 文件与 Show 事件双通道在此汇合,手动
+    # Ctrl+Shift+G 隐藏后"侧边继续对话"(SessionStart → widget-launch.mjs)不再唤回。
+    # 实时读文件(热键写文件的同时唤醒竞态下取到新值;缺文件/损坏 fail-open=显示)。
+    if (-not (Get-ButlerUserHidden -Path $script:uiStateFile)) {
+      # owner 在但处于隐藏态(ZCode X 关闭驻留托盘)时不显示,否则悬浮窗会孤悬桌面;
+      # v0.4.6:ZCode 窗高容不下侧栏时也不显示(高度恢复后跟随自动重现)
+      $ownerShown = (([int64]$script:zcodeHwnd) -eq 0) -or [ButlerNative.Win]::IsWindowVisible($script:zcodeHwnd)
+      if ($ownerShown -and [ButlerHost]::FollowFits()) { [ButlerHost]::Show() }
+    } else { WLog 'wake: suppressed (userHidden)' }
   }
 })
 $wakeTimer.Start()
 
 Invoke-Refresh
-if (-not $NoShowIfExists) { [ButlerHost]::Show() }
+# v0.6.18:冷启动显示过 userHidden 门——用户隐藏后面板重启/ZCode 重开也不自作主张
+# 出现,恢复显示只走 Ctrl+Shift+G(NoShowIfExists 语义不变,仍为二次实例保活用)
+if (-not $NoShowIfExists -and -not $script:userHidden) { [ButlerHost]::Show() }
 if ($script:dockMode -eq 'zcode-right') { [void](Attach-Zcode) }
 [System.Windows.Threading.Dispatcher]::Run()
 # Dispatcher 退出 = 窗口已亡(WM_DESTROY→WM_QUIT;含 owner 关窗随毁)。

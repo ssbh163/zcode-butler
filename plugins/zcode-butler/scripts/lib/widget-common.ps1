@@ -72,6 +72,39 @@ function Request-ButlerSingleInstance {
   return $true
 }
 
+# =====================================================================
+# v0.6.18 手动显隐持久态(butler-widget 专用,stats 不消费):
+#   Ctrl+Shift+G 隐藏后,"侧边继续对话"每会话触发 SessionStart →
+#   widget-launch.mjs 唤醒双通道(touch wake 文件 + 新实例置 Show 事件)把面板
+#   强行唤回——四条自动显示路径均不感知用户意愿(详见 butler-widget.ps1
+#   v0.6.18 条)。userHidden 落盘后由各路径门控。
+# 单测:scripts/widget/widget-fix.test.mjs + widget-fix-cases.ps1
+# =====================================================================
+function Get-ButlerUserHidden {
+  # 读手动隐藏持久态;缺文件/损坏/字段缺失一律 $false(fail-open:状态文件异常
+  # 绝不挡显示,大不了回到"会被唤醒"的旧行为,不能反向把面板锁死)。
+  param([string]$Path = (Join-Path (Join-Path $env:USERPROFILE '.zcode') 'butler-widget-ui.json'))
+  try {
+    if (-not (Test-Path -LiteralPath $Path)) { return $false }
+    $o = Get-Content -LiteralPath $Path -Raw | ConvertFrom-Json
+    if ($o -and $o.PSObject.Properties['userHidden']) { return [bool]$o.userHidden }
+  } catch { }
+  return $false
+}
+
+function Set-ButlerUserHidden {
+  # 写手动隐藏持久态(热键隐藏 $true / 热键显示 $false);失败返回 $false 不抛
+  # (热键路径静默降级=仅本次进程内隐藏,与旧行为等价)。
+  param([bool]$Value, [string]$Path = (Join-Path (Join-Path $env:USERPROFILE '.zcode') 'butler-widget-ui.json'))
+  try {
+    $dir = Split-Path $Path -Parent
+    if ($dir -and -not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    @{ userHidden = [bool]$Value; ts = (Get-Date).ToString('o') } |
+      ConvertTo-Json -Compress | Set-Content -LiteralPath $Path -Encoding ASCII
+    return $true
+  } catch { return $false }
+}
+
 function Stop-ButlerInstance {
   # 统一外部停止(v0.2.1 收编两个 stop.ps1):stamp 精确杀(命令行校验防 pid 复用)
   # → stamp 失效时命令行特征兜底 → 顺带清孤儿 node 子进程($NodeMatch 传空跳过,stats 无)。
