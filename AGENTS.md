@@ -27,7 +27,7 @@ plugins/zcode-butler/
     ├── news.mjs            ← 资讯(数据源可插拔)
     ├── status.mjs          ← 聚合器:--json 统一协议 / --hook 摘要
     ├── chat2doc/           ← extract / format_batch / merge_batch(.py)
-    ├── widget/             ← 用量面板悬浮窗(与 stats-widget 的公共机制在 lib/widget-common.ps1;C# 合成宿主的**合成链路**(初始化/DComp/消息泵)为同构副本:改 A 必改 B——命中策略层各窗自定:widget=形状掩码 HTCLIENT,stats=整窗穿透,勿互相同步)
+    ├── widget/             ← 用量面板悬浮窗(与 stats-widget 的公共机制在 lib/widget-common.ps1;C# 合成宿主的**合成链路**(初始化/DComp/消息泵)为同构副本:改 A 必改 B——命中策略层各窗自定:widget=SetWindowRgn 形状区域+NCHITTEST 掩码兜底(v0.6.19),stats=整窗穿透,勿互相同步)
     └── stats-widget/       ← 性能浮标悬浮窗(v0.13f:输入框右上方 B+E1 双胶囊,UIA 探针自适应 + metrics.mjs 真数据采集器(db 真值/会话视图通道);同上公共机制)
 ```
 

@@ -1004,6 +1004,9 @@
     toastCard.classList.add('on');
     toastCard.setAttribute('aria-hidden', 'false');
     butlerShapeDirty();
+    /* v0.6.18:卡显形即刻重报——宿主窗口区域(SetWindowRgn)随掩码伸缩,等
+       520ms 定时兜底会把滑入动画整段裁掉;落定后 butler-shape-dirty 再补精确矩形 */
+    if (typeof butlerReportShape === 'function') butlerReportShape();
   }
   function butlerToastHide(consume) {
     if (!toastCard) return;
@@ -1037,6 +1040,10 @@
   function applyPanelMin(minimized) {
     stage.classList.toggle('minimized', minimized);
     gearBtn.setAttribute('aria-expanded', String(!minimized));
+    /* v0.6.18:切换起点即按「展开终态位」重报 shape——宿主窗口区域须先于动画
+       扩张(展开时若等 transitionend,0.62s 滑入整段被区域裁成隐形);收起方向
+       同理保持全量区域到落定再收缩(同旧掩码滞后语义)。终态位=忽略 wrap 位移 */
+    if (typeof butlerReportShape === 'function') butlerReportShape(true);
     if (minimized) {
       var p = document.getElementById('usagePop');
       if (p) {   /* 环已出窗,弹窗不留残影 */
@@ -1596,13 +1603,22 @@
       /* v0.6.0 四分发:按 meter 的 data-od-id 渲染对应弹框内容 */
       var kind = String(meter.getAttribute('data-od-id') || '').replace(/^meter-/, '');
       if (POP_TITLES[kind]) renderPop(kind);
-      if (pop.classList.contains('on')) { place(meter); butlerShapeDirty(); return; }  /* 环间滑动不重播,矩形随动重报 */
+      if (pop.classList.contains('on')) {
+        place(meter);
+        butlerShapeDirty();
+        /* v0.6.18:环间滑动即刻重报——弹窗矩形随动,宿主窗口区域不掉队 */
+        if (typeof butlerReportShape === 'function') butlerReportShape();
+        return;
+      }  /* 环间滑动不重播,矩形随动重报 */
       clearTimeout(showT);
       showT = setTimeout(function () {
         place(meter);
         pop.classList.add('on');
         pop.setAttribute('aria-hidden', 'false');
         butlerShapeDirty();   /* v0.6.2:弹窗显形 → 矩形并入掩码(刷新按钮可点的前提) */
+        /* v0.6.18:显形即刻重报(宿主窗口区域先于 0.26s 滑入扩张,动画不被裁);
+           入场 transform 是小距离平移,起点矩形已覆盖终态,落定后兜底再校准 */
+        if (typeof butlerReportShape === 'function') butlerReportShape();
       }, 90);
     }
     function hide() {
@@ -2220,8 +2236,12 @@
        页 ↔ 宿主收窄为数据(ready/data)+ 形状上报(shape)两桥;宿主侧
        DragMove/drag 路由同删,胶囊区点击落在页面无处理器,静默吞掉 */
     /* 形状上报:布局落定后把面板轮廓/fab 圆映射到视口坐标发给宿主,
-       供宿主 WM_NCHITTEST 命中掩码使用(合成宿主下渲染与命中分离,边缘 AA 保真) */
-    function butlerReportShape() {
+       供宿主 WM_NCHITTEST 命中掩码与窗口形状区域(SetWindowRgn)使用
+       (合成宿主下渲染与命中分离,边缘 AA 保真)。
+       v0.6.18 useFinalPos === true:按展开终态位上报(忽略收起位移)——面板
+       展开/收起切换的起点即报,宿主区域先行扩张/滞后收缩,滑入动画不被区域
+       裁掉;严格 === true 判定:rAF 回调首参是时间戳,不可当布尔用 */
+    function butlerReportShape(useFinalPos) {
       var stage = document.querySelector('.stage');
       var panel = document.getElementById('panelPath');
       if (!stage || !panel) return;
@@ -2233,7 +2253,7 @@
       var pwrap = document.getElementById('panelWrap');
       var wrapTf = pwrap ? getComputedStyle(pwrap).transform : 'none';
       var wrapDx = 0;
-      if (wrapTf && wrapTf !== 'none') {
+      if (useFinalPos !== true && wrapTf && wrapTf !== 'none') {
         try { wrapDx = new DOMMatrixReadOnly(wrapTf).e * kx; } catch (err) { }
       }
       /* 胶囊轮廓:沿实际渲染的平滑路径每 4 舞台px 重采样(非 250 点折线)——
@@ -2331,6 +2351,13 @@
         if (e.target === toastForShape && e.propertyName === 'transform') butlerReportShape();
       });
     }
+    /* v0.6.18:窗口尺寸变化(uiScale/跨屏重设窗口)→ 防抖重报 shape——掩码与
+       窗口形状区域都按新视口重算(此前仅靠偶发 dirty,resize 后一直陈旧) */
+    var shapeRsT = 0;
+    window.addEventListener('resize', function () {
+      clearTimeout(shapeRsT);
+      shapeRsT = setTimeout(function () { butlerReportShape(); }, 120);
+    });
     window.addEventListener('butler-shape-dirty', function () {
       setTimeout(butlerReportShape, 520);
     });
