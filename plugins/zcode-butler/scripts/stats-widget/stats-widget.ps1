@@ -501,7 +501,10 @@ WLog ('boot: init ' + $initX + ',' + $initY + ' ' + $script:winW + 'x' + $script
 [void][StatsNative.Win]::RegisterHotKey([StatsHost]::Handle, 0xB002, 0x3, 0x53)
 
 [StatsHost]::OnHotKey = {
-  if ([StatsHost]::Visible) { [StatsHost]::Hide() } else { [StatsHost]::Show() }
+  # v0.13i 补:热键显隐此前零日志,胶囊"无声消失"无从溯源(2026-10-05 实例:窗口被藏
+  # 但日志无任何隐藏行,唯一无日志路径即此处误触)——补日志留痕
+  if ([StatsHost]::Visible) { [StatsHost]::Hide(); WLog 'hotkey: hide(Ctrl+Alt+S)' }
+  else { [StatsHost]::Show(); WLog 'hotkey: show(Ctrl+Alt+S)' }
 }
 
 # ---- 页面消息:回执日志(主题应用/相位切换等) ----
