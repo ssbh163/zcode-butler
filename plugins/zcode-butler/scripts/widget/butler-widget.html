@@ -1850,6 +1850,39 @@
      系统跟随也天然正确)边沿推 {"type":"ztheme"};信号未到(刚载入/stats 自愈换代窗口)
      保持当前态;?edge= 预览态不受门控(七案全可看) */
   var zThemeDark = false;
+  /* ── v0.6.22 隐藏区标注(可视化调试,宿主 zones 消息驱动):窗口内透明预留区分色——
+     上半橙 rgba(255,110,0,.34)、下半蓝 rgba(0,140,255,.30),分界跟随 panelWrap 实测
+     矩形(收展/缩放后 500ms 定时校正);两个 fixed div 置于 z-index 1(实体内容之下、
+     body 之上),只从透明区露出 ── */
+  var zonesOn = false, zonesTimer = 0;
+  function butlerZones(on) {
+    zonesOn = !!on;
+    ['butlerZoneTop', 'butlerZoneBot'].forEach(function (id) {
+      var el = document.getElementById(id);
+      if (el) { el.remove(); }
+    });
+    clearInterval(zonesTimer); zonesTimer = 0;
+    if (!zonesOn) return;
+    var mk = function (id, color) {
+      var d = document.createElement('div');
+      d.id = id;
+      d.style.cssText = 'position:fixed;left:0;right:0;pointer-events:none;z-index:1;background:' + color + ';';
+      document.body.appendChild(d);
+      return d;
+    };
+    var top = mk('butlerZoneTop', 'rgba(255,110,0,.34)');
+    var bot = mk('butlerZoneBot', 'rgba(0,140,255,.30)');
+    var place = function () {
+      var pw = document.getElementById('panelWrap');
+      var pr = pw ? pw.getBoundingClientRect() : null;
+      var t = pr ? Math.max(0, pr.top) : 0;
+      var b = pr ? Math.min(window.innerHeight, pr.bottom) : window.innerHeight;
+      top.style.top = '0'; top.style.height = t + 'px';
+      bot.style.top = b + 'px'; bot.style.height = Math.max(0, window.innerHeight - b) + 'px';
+    };
+    place();
+    zonesTimer = setInterval(place, 500);
+  }
   function butlerZTheme(v) {
     var dark = (v === 'dark');
     if (dark === zThemeDark) return;
@@ -2212,6 +2245,11 @@
         } else if (msg && msg.type === 'ztheme') {
           /* v0.6.15 星空主题门控:宿主边沿推送的 ZCode 实况主题(深色才启粒子) */
           butlerZTheme(msg.v);
+        } else if (msg && msg.type === 'zones') {
+          /* v0.6.22 隐藏区标注(可视化调试):透明预留区染色——上半橙/下半蓝,分界按
+             panelWrap 实测矩形动态更新(收展动画时 500ms 跟随);不透明实体(黑条/fab)
+             盖在色层之上不受影响。开关 = %TEMP%\butler-widget-zones.json {"v":1},v:0 关闭 */
+          butlerZones(+msg.v === 1);
         }
       } catch (err) { }
     });

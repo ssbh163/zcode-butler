@@ -1125,6 +1125,16 @@ $wakeTimer.Add_Tick({
     } catch { WLog ('notify THREW: ' + $_.Exception.Message) }
     try { Remove-Item $script:notifyFile -Force -ErrorAction SilentlyContinue } catch { }
   }
+  # v0.6.22 隐藏区标注(可视化调试):%TEMP%\butler-widget-zones.json {"v":1} → 推页面染色
+  # (上半透明橙/下半透明蓝,随面板收展动态分界;不透明实体不受影响),推完即删;echo > 文件即开
+  if ($script:pageReady -and (Test-Path "$env:TEMP\butler-widget-zones.json")) {
+    try {
+      $zv = (Get-Content "$env:TEMP\butler-widget-zones.json" -Raw | ConvertFrom-Json).v
+      [ButlerHost]::PostJson(('{"type":"zones","v":' + [int]$zv + '}'))
+      WLog ('zones injected: ' + $zv)
+    } catch { }
+    try { Remove-Item "$env:TEMP\butler-widget-zones.json" -Force -ErrorAction SilentlyContinue } catch { }
+  }
   $wake = $showEvt.WaitOne(0)
   $wi = Get-Item $wakeFile -ErrorAction SilentlyContinue
   if ($wi -and $wi.LastWriteTimeUtc -gt $script:lastWake) {
