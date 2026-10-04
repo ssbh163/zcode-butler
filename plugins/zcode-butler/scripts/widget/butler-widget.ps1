@@ -491,9 +491,8 @@ public static class ButlerHost {
       else PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);   // MINIMIZE/SHOW/HIDE -> visibility sync
     } catch { }
   }
-  // v0.4.7 anchor + overflow: capsule center = ZCode top + zcodeH/3 (2/3 from bottom).
-  // Fits when zcodeH/3 >= halfCapsule (top side, binding) AND the visible bottom
-  // (capsule + fab) stays under 2/3 zcodeH; otherwise hide and auto re-show on fit.
+  // v0.6.21 居中锚定(用户拍板"用量面板居中在侧边"):胶囊中心 = ZCode 垂直中点(zh/2,
+  // 原 v0.4.7 为 zh/3)。容纳判定同步改为上下各半:半胶囊 ≤ zh/2,否则隐藏、恢复自现。
   public static void SyncFollowNow() { ApplyFollowGeom(false); }
   // Capsule vertical extent in window-client physical px from the runtime shape-mask
   // outline (no design constants — UI moves/resizes keep the anchor correct).
@@ -521,7 +520,7 @@ public static class ButlerHost {
     int mid = cTop + (cBot - cTop) / 2;
     int botVis = cBot;
     if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
-    return (mid - cTop) <= zh / 3 && (botVis - mid) <= 2 * (zh / 3);
+    return (mid - cTop) <= zh / 2 && (botVis - mid) <= zh / 2;   // v0.6.21 居中锚定:上下各半
   }
   private static void ApplyFollowGeom(bool showWhenUp) {
     if (_zHwnd2 == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
@@ -536,12 +535,12 @@ public static class ButlerHost {
     int mid = cTop + (cBot - cTop) / 2;
     int botVis = cBot;
     if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
-    if ((mid - cTop) > zh / 3 || (botVis - mid) > 2 * (zh / 3)) {
+    if ((mid - cTop) > zh / 2 || (botVis - mid) > zh / 2) {   // v0.6.21 居中锚定:上下各半
       // overflow: hide; flag only when we did the hiding (manual hotkey hide stays manual)
       if (IsWindowVisible(_hwnd)) { ShowWindow(_hwnd, 0); _sizeHidden = true; }
       return;
     }
-    int x = z.Right - _fwW2, y = z.Top + zh / 3 - mid;   // capsule center lands at zcodeH/3
+    int x = z.Right - _fwW2, y = z.Top + zh / 2 - mid;   // v0.6.21 居中锚定:capsule center lands at zcodeH/2
     SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
     if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
     if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
