@@ -540,7 +540,7 @@ public static class ButlerHost {
       if (IsWindowVisible(_hwnd)) { ShowWindow(_hwnd, 0); _sizeHidden = true; }
       return;
     }
-    int x = z.Right - _fwW2, y = z.Top + zh / 2 - mid;   // v0.6.21 居中锚定:capsule center lands at zcodeH/2
+    int x = z.Right - _fwW2, y = z.Top + (zh - wh) / 2;   // v0.6.21 居中锚定(用户实拍勘正):窗口整体在 ZCode 侧边垂直居中(含上下预留区;原掩码中心锚定致整体偏 ~51px)
     SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
     if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
     if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
