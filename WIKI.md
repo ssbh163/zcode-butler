@@ -25,7 +25,7 @@
 | `scripts/widget/` | 用量面板悬浮窗(butler-widget.ps1:C# 合成宿主内联 Add-Type;butler-widget.html:四环/环详情弹框/展开收起/活动提醒)+ stop.ps1(停实例)+ widget-launch.mjs(touch wake + host.json ppid + vbs 冷启动)+ widget-launch.vbs(ASCII 免黑窗) | ✅ M2 |
 | `commands/` | usage / watch / doc / news 四命令 | ✅ M1+M3 |
 | `skills/butler/SKILL.md` | 自然语言主入口(四能力) | ✅ M1+M3 |
-| `hooks/hooks.json` | SessionStart → widget-launch + status.mjs --hook + doc-intent --startup;UserPromptSubmit → doc-intent | ✅ 全量 |
+| `hooks/hooks.json` | SessionStart → **sync-mirror(市场镜像 ff-only/重git化自动同步,10min 节流)** + widget-launch + stats-launch + status.mjs --hook + doc-intent --startup;UserPromptSubmit → doc-intent | ✅ 全量 |
 
 ### 2. 核心架构
 

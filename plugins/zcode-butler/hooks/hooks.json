@@ -5,6 +5,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"${ZCODE_PLUGIN_ROOT}/scripts/lib/sync-mirror.mjs\"",
+            "timeoutMs": 20000,
+            "statusMessage": "码管家:同步插件市场镜像(ff-only,静默)"
+          },
+          {
+            "type": "command",
             "command": "node \"${ZCODE_PLUGIN_ROOT}/scripts/widget/widget-launch.mjs\"",
             "timeoutMs": 10000,
             "statusMessage": "码管家:拉起/唤醒悬浮窗(Windows)"
