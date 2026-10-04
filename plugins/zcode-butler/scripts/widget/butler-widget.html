@@ -2321,6 +2321,11 @@
     else { window.addEventListener('load', function () { requestAnimationFrame(butlerReportShape); }); }
     /* 展开/收起动画落定后重报形状:掩码 X 跟随面板进出(收起后穿透、展开后可拖),
        Y 量程不变故宿主锚定不动;打断反转时只在最终态报一次(transitionend 语义) */
+    /* v0.6.25:窗口物理尺寸变化(uiScale 跨屏重设 / 系统 DPI 自动缩放)→ 立即重报 shape。
+       mask/Rgn/锚定 botVis 全依赖实测几何,resize 后旧值全陈旧——不报则跨屏后面板
+       掩码错位点不中(无法交互)、Rgn 停在撒开态、botVis 陈旧误判溢出(_sizeHidden
+       卡死=移回原屏面板消失)(tag bf70b84 先例,移植 Rgn 时漏带,2026-10-05 用户跨屏实测补) */
+    window.addEventListener('resize', function () { butlerReportShape(); }, { passive: true });
     var pwrapForShape = document.getElementById('panelWrap');
     if (pwrapForShape) {
       pwrapForShape.addEventListener('transitionend', function (e) {

@@ -611,8 +611,11 @@ public static class ButlerHost {
   public static void ClearViewRgn() {
     if (_hwnd == IntPtr.Zero) return;
     _lastRgnL = -1; _lastRgnT = -1; _lastRgnR = -1; _lastRgnB = -1;
-    SetWindowRgn(_hwnd, CreateRectRgn(0, 0, _fullW2, _fullH2), false);   // 撒=整窗不裁
-    Log("viewrgn clear (full stage " + _fullW2 + "x" + _fullH2 + ")");
+    // 撒=整窗不裁。用超大区域(系统按窗口 clamp)而非旧 _fullW2/_fullH2:跨屏放大时
+    // 旧尺寸 Rgn 会把新扩展区(胶囊所在右缘)留在裁剪外——Rgn 外即系统层面无窗口,
+    // 表象=胶囊不可见不可点(v0.6.25 修,2026-10-05 用户跨屏实测)
+    SetWindowRgn(_hwnd, CreateRectRgn(0, 0, 32000, 32000), false);
+    Log("viewrgn clear (full stage)");
   }
   private static void ApplyViewWindow() {
     if (_hwnd == IntPtr.Zero) return;
