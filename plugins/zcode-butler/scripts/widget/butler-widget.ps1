@@ -463,6 +463,19 @@ public static class ButlerHost {
   private static IntPtr _locHook2, _minHook2, _visHook2;
 
   public static void SetFollowParams(IntPtr z, int w) { _zHwnd2 = z; _fwW2 = w; }
+  // v0.6.26 跨屏即时静默(用户拍板"等变化好了再显示"):ApplyFollowGeom(每次 FOLLOW2,
+  // 拖动帧级)里检测 ZCode 所在屏变化 → 立即隐藏(不等 PS rescan 2.5s,旧态零露出)→
+  // OnMonChange 委托通知 PS 立即 Update-UiScale(force)重设尺寸;新 shape 到达时
+  // ApplyViewWindow 裁好取景框 → 解除 _scaleHidden 恢复显示。同 scale 跨屏(同分辨率
+  // 双屏,无 resize 无新 shape)由 PS 调 ClearScaleHidden 直接恢复,防隐藏卡死。
+  [DllImport("user32.dll")] private static extern IntPtr MonitorFromWindow(IntPtr h, uint f);
+  private static IntPtr _lastMon2;
+  private static bool _scaleHidden;
+  public static Action OnMonChange;
+  public static void ClearScaleHidden() {
+    _scaleHidden = false;
+    try { ApplyFollowGeom(true); } catch { }
+  }
   public static void HookFollowNow() {
     UnhookFollowNow();
     if (_zHwnd2 == IntPtr.Zero || _zHwnd2 == _hwnd) return;
@@ -535,6 +548,16 @@ public static class ButlerHost {
     if (zh <= 0 || wh <= 0) return;
     bool up = !IsIconicB(_zHwnd2) && IsWindowVisible(_zHwnd2);
     if (!up) { if (IsWindowVisible(_hwnd)) ShowWindow(_hwnd, 0); return; }
+    // v0.6.26 跨屏即时检测(帧级):屏变化 → 隐藏 + 通知 PS 立即重设;_lastMon2==Zero
+    // 为首次吸附,初始化不算变化。更新 _lastMon2 必须在回调之前——回调链里的
+    // SyncFollowNow 会重入本函数,先更缓存防二次触发(否则收敛前误走 ClearScaleHidden)
+    IntPtr monNow = MonitorFromWindow(_zHwnd2, 1);
+    if (_lastMon2 != IntPtr.Zero && monNow != IntPtr.Zero && monNow != _lastMon2) {
+      _lastMon2 = monNow;
+      if (IsWindowVisible(_hwnd)) ShowWindow(_hwnd, 0);
+      _scaleHidden = true;
+      try { var f = OnMonChange; if (f != null) f(); } catch { }
+    } else if (monNow != IntPtr.Zero) { _lastMon2 = monNow; }
     int cTop, cBot;
     bool haveShape = CapsuleExtent(out cTop, out cBot, wh);
     int mid = cTop + (cBot - cTop) / 2;
@@ -555,7 +578,7 @@ public static class ButlerHost {
     }
     SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
     if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
-    if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
+    if ((showWhenUp || _sizeHidden) && !_scaleHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }   // v0.6.26:_scaleHidden 一票否决(跨屏静默中,只有新 shape 裁好 Rgn 才解除)
   }
   public static void PostJson(string json) {
     var c = _controller;
@@ -566,7 +589,8 @@ public static class ButlerHost {
     Log("mask pts=" + n + " fab=(" + fx + "," + fy + " r" + fr + ")");
     // Shape landed: visible bottom now known — fit verdict may flip from the
     // conservative full-window fallback to the real (smaller) visible extent.
-    try { ApplyFollowGeom(false); } catch { }
+    // v0.6.26:裁剪先行——ApplyViewWindow 内含 ApplyFollowGeom(先裁 Rgn 再锚定/显示,
+    // 保证跨屏恢复显示那一刻取景框已就位)
     try { ApplyViewWindow(); } catch { }   // v0.6.24:实体包络裁剪(先撒后设的"设"端)
   }
 
@@ -645,7 +669,14 @@ public static class ButlerHost {
     IntPtr rgn = CreateRectRgn(l, t, r2, b2);
     SetWindowRgn(_hwnd, rgn, false);
     Log("viewrgn " + (r2 - l) + "x" + (b2 - t) + " @" + l + "," + t);
-    try { ApplyFollowGeom(false); } catch { }   // Rgn 更新后重锚定(取景框变化不影响,防御性)
+    // v0.6.26:跨屏静默的解除点——新 shape 已把取景框裁好,此刻恢复显示即"变化好了再
+    // 显示";showWhenUp=true 走显示分支(此时 _scaleHidden 已清,不再被否决)
+    if (_scaleHidden) {
+      _scaleHidden = false;
+      try { ApplyFollowGeom(true); } catch { }
+    } else {
+      try { ApplyFollowGeom(false); } catch { }   // Rgn 更新后重锚定(取景框变化不影响,防御性)
+    }
   }
   private static int _lastRgnL = -1, _lastRgnT = -1, _lastRgnR = -1, _lastRgnB = -1;
 
@@ -1123,7 +1154,8 @@ function Update-UiScale([bool]$force) {
   try {
     if (([int64]$script:zcodeHwnd) -eq 0) { return }
     $mon = [ButlerNative.Win]::MonitorFromWindow($script:zcodeHwnd, 1)
-    if (-not $force -and $mon -eq $script:lastScaleMon) { return }
+    $monChanged = ($mon -ne $script:lastScaleMon)
+    if (-not $force -and -not $monChanged) { return }
     $script:lastScaleMon = $mon
     $s = Get-ScreenScaleOf $script:zcodeHwnd
     if ($s -ne $script:uiScale) {
@@ -1131,6 +1163,9 @@ function Update-UiScale([bool]$force) {
       $script:winH = [int][Math]::Round($script:baseWinH * $s)
       $script:winW = [int][Math]::Ceiling($script:baseWinW * $s)
       try {
+        # v0.6.26 跨屏静默:变化期间隐藏(C# 已在帧级检测时隐藏,此处幂等防御),
+        # 新 shape 裁好取景框后由 ApplyViewWindow 恢复显示
+        [ButlerHost]::Hide()
         # v0.6.24 先撒后设:改尺寸前先撒 Rgn(整窗不裁)——杜绝"新尺寸+旧区域"的错误
         # 裁剪中间帧(tag 线缩放瞬间缺失的根因);新 shape 到达时 ApplyViewWindow 再精确裁
         [ButlerHost]::ClearViewRgn()
@@ -1140,9 +1175,16 @@ function Update-UiScale([bool]$force) {
         [ButlerHost]::SyncFollowNow()
         WLog ('ui-scale: ' + $s + ' -> ' + $script:winW + 'x' + $script:winH)
       } catch { WLog ('ui-scale THREW ' + $_.Exception.Message) }
+    } elseif ($force -or $monChanged) {
+      # v0.6.26 跨屏但 scale 相同(同分辨率双屏):无 resize 无新 shape,直接恢复显示
+      # (不走上面流程防 _scaleHidden 卡死)
+      [ButlerHost]::ClearScaleHidden()
     }
   } catch { }
 }
+# v0.6.26:C# 帧级屏变化检测的回调(委托常驻,同 Log 模式)——跨屏瞬间立即重设,
+# 不等 rescan 2.5s(静默期 = 检测即时 + 收敛 ~百ms,旧态零露出)
+[ButlerHost]::OnMonChange = { try { Update-UiScale $true } catch { } }
 
 $rescanTimer = New-Object System.Windows.Threading.DispatcherTimer
 $rescanTimer.Interval = [TimeSpan]::FromMilliseconds(2500)

@@ -84,15 +84,42 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
 }
 $script:lastScaleMon = [IntPtr]::Zero
 $script:curZoom = 0.0
+# ---- v0.13i 跨屏切换静默(用户拍板"等变化好了再显示"):检测到屏变化先隐藏,
+# resize+zoom 推送后由一次性 timer(600ms)收敛显示(zoomApplied 回执通道 C# 侧
+# 只 Log 未转发,定时最省);显隐兜底被 $script:scaleHidden 压制防提前翻回 ----
+$script:scaleHidden = $false
+$script:scaleShowTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:scaleShowTimer.Interval = [TimeSpan]::FromMilliseconds(600)
+$script:scaleShowTimer.Add_Tick({
+  $script:scaleShowTimer.Stop()
+  if ($script:scaleHidden) {
+    $script:scaleHidden = $false
+    try {
+      if (([int64]$script:zcodeHwnd) -ne 0 -and [StatsNative.Win]::IsWindow($script:zcodeHwnd) -and
+          (-not [StatsNative.Win]::IsIconic($script:zcodeHwnd)) -and [StatsNative.Win]::IsWindowVisible($script:zcodeHwnd)) {
+        Place-TopCenter
+        [StatsHost]::Show()
+        WLog 'scale-show: converged'
+      }
+    } catch { }
+  }
+})
 function Update-UiScale([bool]$force) {
   try {
-    if (([int64]$script:zcodeHwnd) -eq [IntPtr]::Zero) { return }
+    if (([int64]$script:zcodeHwnd) -eq 0) { return }
     $mon = [StatsNative.Win]::MonitorFromWindow($script:zcodeHwnd, 1)
-    if (-not $force -and $mon -eq $script:lastScaleMon) { return }
+    $monChanged = ($mon -ne $script:lastScaleMon)
+    if (-not $force -and -not $monChanged) { return }
     $script:lastScaleMon = $mon
     $s = Get-ScreenScaleOf $script:zcodeHwnd
-    if ($force -or $s -ne $script:uiScale) {
+    if ($s -ne $script:uiScale) {
       $script:uiScale = $s
+      # v0.13i 跨屏静默:变化期间隐藏,收敛 timer 到点显示
+      if (-not $script:scaleHidden) {
+        $script:scaleHidden = $true
+        try { [StatsHost]::Hide() } catch { }
+      }
+      $script:scaleShowTimer.Stop(); $script:scaleShowTimer.Start()
       # 窗口物理重设(基准 × scale;0x16 = NOMOVE|NOZORDER|NOACTIVATE)
       $nw = [int][Math]::Ceiling($script:baseWinW * $s)
       $nh = [int][Math]::Ceiling($script:baseWinH * $s)
@@ -109,6 +136,15 @@ function Update-UiScale([bool]$force) {
       if ($force -or $z -ne $script:curZoom) {
         $script:curZoom = $z
         try { [StatsHost]::PostJson(('{"type":"zoom","v":' + $z.ToString('0.###', [System.Globalization.CultureInfo]::InvariantCulture) + '}')); WLog ('ui-scale: ' + $s + ' win=' + $nw + 'x' + $nh + ' zoom=' + $z) } catch { }
+      }
+    } elseif ($force -or $monChanged) {
+      # v0.13i 跨屏但 scale 相同(同分辨率双屏):无 zoom 无收敛链,直接恢复
+      if ($script:scaleHidden) {
+        $script:scaleShowTimer.Stop()
+        $script:scaleHidden = $false
+        Place-TopCenter
+        [StatsHost]::Show()
+        WLog 'scale-show: same-scale monitor change'
       }
     }
   } catch { }
@@ -640,6 +676,14 @@ $followTimer = New-Object System.Windows.Threading.DispatcherTimer
 $followTimer.Interval = [TimeSpan]::FromMilliseconds(100)   # v0.13g:锚 40ms stat 链退役,降频;只做 metrics 推送 + 主题采样 + 显隐兜底
 $followTimer.Add_Tick({
   try {
+    # v0.13i 跨屏检测提速:100ms 粒度查 ZCode 所在屏(rescan 2.5s 只兜生死/重吸附),
+    # 变化即走 Update-UiScale 静默重设——旧态胶囊零露出
+    if (([int64]$script:zcodeHwnd) -ne 0 -and [StatsNative.Win]::IsWindow($script:zcodeHwnd)) {
+      try {
+        $monNow = [StatsNative.Win]::MonitorFromWindow($script:zcodeHwnd, 1)
+        if ($monNow -ne [IntPtr]::Zero -and $monNow -ne $script:lastScaleMon) { Update-UiScale $false }
+      } catch { }
+    }
     # v0.13:metrics 文件变化即推页(500ms 节流;>8s 陈旧视为采集器死,不推)
     if (((Get-Date) - $script:lastStatsCheck).TotalMilliseconds -ge 500) {
       $script:lastStatsCheck = Get-Date
@@ -678,7 +722,7 @@ $followTimer.Add_Tick({
         if ([StatsNative.Win]::IsIconic($script:zcodeHwnd) -or (-not [StatsNative.Win]::IsWindowVisible($script:zcodeHwnd))) {
           if ([StatsHost]::Visible) { [StatsHost]::Hide(); WLog 'sm: hide(zcode hidden)' }
         }
-        elseif (-not [StatsHost]::Visible) {
+        elseif ((-not [StatsHost]::Visible) -and (-not $script:scaleHidden)) {   # v0.13i:跨屏静默中不被兜底翻回
           Place-TopCenter
           [StatsHost]::Show(); WLog 'sm: show(zcode up)'
         }
