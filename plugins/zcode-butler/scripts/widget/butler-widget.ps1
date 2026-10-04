@@ -491,8 +491,9 @@ public static class ButlerHost {
       else PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);   // MINIMIZE/SHOW/HIDE -> visibility sync
     } catch { }
   }
-  // v0.6.21 居中锚定(用户拍板"用量面板居中在侧边"):胶囊中心 = ZCode 垂直中点(zh/2,
-  // 原 v0.4.7 为 zh/3)。容纳判定同步改为上下各半:半胶囊 ≤ zh/2,否则隐藏、恢复自现。
+  // v0.4.7 anchor + overflow: capsule center = ZCode top + zcodeH/3 (2/3 from bottom).
+  // Fits when zcodeH/3 >= halfCapsule (top side, binding) AND the visible bottom
+  // (capsule + fab) stays under 2/3 zcodeH; otherwise hide and auto re-show on fit.
   public static void SyncFollowNow() { ApplyFollowGeom(false); }
   // Capsule vertical extent in window-client physical px from the runtime shape-mask
   // outline (no design constants — UI moves/resizes keep the anchor correct).
@@ -520,7 +521,7 @@ public static class ButlerHost {
     int mid = cTop + (cBot - cTop) / 2;
     int botVis = cBot;
     if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
-    return (mid - cTop) <= zh / 2 && (botVis - mid) <= zh / 2;   // v0.6.21 居中锚定:上下各半
+    return (mid - cTop) <= zh / 3 && (botVis - mid) <= 2 * (zh / 3);
   }
   private static void ApplyFollowGeom(bool showWhenUp) {
     if (_zHwnd2 == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
@@ -535,12 +536,12 @@ public static class ButlerHost {
     int mid = cTop + (cBot - cTop) / 2;
     int botVis = cBot;
     if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
-    if ((mid - cTop) > zh / 2 || (botVis - mid) > zh / 2) {   // v0.6.21 居中锚定:上下各半
+    if ((mid - cTop) > zh / 3 || (botVis - mid) > 2 * (zh / 3)) {
       // overflow: hide; flag only when we did the hiding (manual hotkey hide stays manual)
       if (IsWindowVisible(_hwnd)) { ShowWindow(_hwnd, 0); _sizeHidden = true; }
       return;
     }
-    int x = z.Right - _fwW2, y = z.Top + (zh - wh) / 2;   // v0.6.21 居中锚定(用户实拍勘正):窗口整体在 ZCode 侧边垂直居中(含上下预留区;原掩码中心锚定致整体偏 ~51px)
+    int x = z.Right - _fwW2, y = z.Top + zh / 3 - mid;   // capsule center lands at zcodeH/3
     SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
     if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
     if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
@@ -724,7 +725,6 @@ function Push-Data {
 
 [ButlerHost]::OnMessage = {
   param($msg)
-  if ($msg -like '*zonesAck*') { WLog ('page-ack: ' + $msg) }   # v0.6.22 诊断:zones 到达回执
   try {
     if ($msg -like '{"type":"shape"*') {
       try {
@@ -1125,16 +1125,6 @@ $wakeTimer.Add_Tick({
       WLog ('notify injected: ' + $payload)
     } catch { WLog ('notify THREW: ' + $_.Exception.Message) }
     try { Remove-Item $script:notifyFile -Force -ErrorAction SilentlyContinue } catch { }
-  }
-  # v0.6.22 隐藏区标注(可视化调试):%TEMP%\butler-widget-zones.json {"v":1} → 推页面染色
-  # (上半透明橙/下半透明蓝,随面板收展动态分界;不透明实体不受影响),推完即删;echo > 文件即开
-  if ($script:pageReady -and (Test-Path "$env:TEMP\butler-widget-zones.json")) {
-    try {
-      $zv = (Get-Content "$env:TEMP\butler-widget-zones.json" -Raw | ConvertFrom-Json).v
-      [ButlerHost]::PostJson(('{"type":"zones","v":' + [int]$zv + '}'))
-      WLog ('zones injected: ' + $zv)
-    } catch { }
-    try { Remove-Item "$env:TEMP\butler-widget-zones.json" -Force -ErrorAction SilentlyContinue } catch { }
   }
   $wake = $showEvt.WaitOne(0)
   $wi = Get-Item $wakeFile -ErrorAction SilentlyContinue
