@@ -86,32 +86,23 @@ $script:lastScaleMon = [IntPtr]::Zero
 $script:curZoom = 0.0
 # ---- v0.13i 跨屏切换静默(用户拍板"等变化好了再显示"):检测到屏变化先隐藏,
 # resize+zoom 推送后由一次性 timer(600ms)收敛显示(zoomApplied 回执通道 C# 侧
-# 只 Log 未转发,定时最省);显隐兜底被 $script:scaleHidden 压制防提前翻回 ----
+# 只 Log 未转发,定时最省);显隐兜底被 $script:scaleHidden 压制防提前翻回。
+# timer 对象的实际创建在下方 Add-Type WindowsBase 之后(依赖装载段)——DispatcherTimer
+# 类型在依赖加载前不可解析(New-Object 语句级抛错不杀脚本但留下 $null,曾致
+# 跨屏 Hide 后显示链全断=胶囊永隐,2026-10-05 实测定位) ----
 $script:scaleHidden = $false
-$script:scaleShowTimer = New-Object System.Windows.Threading.DispatcherTimer
-$script:scaleShowTimer.Interval = [TimeSpan]::FromMilliseconds(600)
-$script:scaleShowTimer.Add_Tick({
-  $script:scaleShowTimer.Stop()
-  if ($script:scaleHidden) {
-    $script:scaleHidden = $false
-    try {
-      if (([int64]$script:zcodeHwnd) -ne 0 -and [StatsNative.Win]::IsWindow($script:zcodeHwnd) -and
-          (-not [StatsNative.Win]::IsIconic($script:zcodeHwnd)) -and [StatsNative.Win]::IsWindowVisible($script:zcodeHwnd)) {
-        Place-TopCenter
-        [StatsHost]::Show()
-        WLog 'scale-show: converged'
-      }
-    } catch { }
-  }
-})
 function Update-UiScale([bool]$force) {
   try {
     if (([int64]$script:zcodeHwnd) -eq 0) { return }
     $mon = [StatsNative.Win]::MonitorFromWindow($script:zcodeHwnd, 1)
     $monChanged = ($mon -ne $script:lastScaleMon)
     if (-not $force -and -not $monChanged) { return }
+    $prevMon = $script:lastScaleMon
     $script:lastScaleMon = $mon
     $s = Get-ScreenScaleOf $script:zcodeHwnd
+    # v0.13i 诊断:跨屏检测触发即留痕(实测有"用户切屏但本函数从未动作"的无日志案例,
+    # 靠此行定位检测链断点;量小,仅 monChanged 时打)
+    WLog ('ui-scale check: mon ' + $prevMon + ' -> ' + $mon + ' s=' + $s + ' cur=' + $script:uiScale)
     if ($s -ne $script:uiScale) {
       $script:uiScale = $s
       # v0.13i 跨屏静默:变化期间隐藏,收敛 timer 到点显示
@@ -152,6 +143,31 @@ function Update-UiScale([bool]$force) {
 
 # ---- 依赖装载与 DPI ----
 Add-Type -AssemblyName WindowsBase, System.Drawing
+
+# v0.13i 跨屏收敛 timer(必须在此处创建:DispatcherTimer 类型依赖上方 WindowsBase,
+# 此前误置于依赖加载前——New-Object 语句级抛错不杀脚本但留下 $null timer,跨屏
+# Hide 后 Stop() 在 null 上抛、显示链全断=胶囊永隐,2026-10-05 实测定位)
+$script:scaleShowTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:scaleShowTimer.Interval = [TimeSpan]::FromMilliseconds(600)
+$script:scaleShowTimer.Add_Tick({
+  $script:scaleShowTimer.Stop()
+  if ($script:scaleHidden) {
+    $script:scaleHidden = $false
+    try {
+      if (([int64]$script:zcodeHwnd) -ne 0 -and [StatsNative.Win]::IsWindow($script:zcodeHwnd) -and
+          (-not [StatsNative.Win]::IsIconic($script:zcodeHwnd)) -and [StatsNative.Win]::IsWindowVisible($script:zcodeHwnd)) {
+        Place-TopCenter
+        [StatsHost]::Show()
+        WLog 'scale-show: converged'
+      } else {
+        # 接力修复:显示条件瞬时不满足(ZCode 恰最小化/句柄瞬断)时,交给 100ms
+        # 显隐兜底接力(置 FollowDirty,ZCode up 即显)——否则跨屏静默变永隐
+        [StatsState]::FollowDirty = 1
+        WLog 'scale-show: deferred to follow-dirty'
+      }
+    } catch { [StatsState]::FollowDirty = 1 }
+  }
+})
 Add-Type -Namespace StatsNative -Name Win -MemberDefinition @'
 [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr hWnd, int id, uint fsModifiers, uint vk);
 [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr hWnd, int id);
