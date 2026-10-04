@@ -724,6 +724,7 @@ function Push-Data {
 
 [ButlerHost]::OnMessage = {
   param($msg)
+  if ($msg -like '*zonesAck*') { WLog ('page-ack: ' + $msg) }   # v0.6.22 诊断:zones 到达回执
   try {
     if ($msg -like '{"type":"shape"*') {
       try {

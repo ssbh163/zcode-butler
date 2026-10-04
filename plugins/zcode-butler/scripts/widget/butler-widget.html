@@ -1857,6 +1857,7 @@
   var zonesOn = false, zonesTimer = 0;
   function butlerZones(on) {
     zonesOn = !!on;
+    try { window.chrome.webview.postMessage('{"type":"zonesAck","v":' + (zonesOn ? 1 : 0) + ',"topEl":' + (document.getElementById('butlerZoneTop') ? 1 : 0) + '}'); } catch (err) { }
     ['butlerZoneTop', 'butlerZoneBot'].forEach(function (id) {
       var el = document.getElementById(id);
       if (el) { el.remove(); }
@@ -1873,14 +1874,15 @@
     var top = mk('butlerZoneTop', 'rgba(255,110,0,.34)');
     var bot = mk('butlerZoneBot', 'rgba(0,140,255,.30)');
     var place = function () {
-      var pw = document.getElementById('panelWrap');
-      var pr = pw ? pw.getBoundingClientRect() : null;
+      var pp = document.getElementById('panelPath');   // 黑条轮廓本体(panelWrap 撑满全舞台,不能当分界)
+      var pr = pp ? pp.getBoundingClientRect() : null;
       var t = pr ? Math.max(0, pr.top) : 0;
       var b = pr ? Math.min(window.innerHeight, pr.bottom) : window.innerHeight;
       top.style.top = '0'; top.style.height = t + 'px';
       bot.style.top = b + 'px'; bot.style.height = Math.max(0, window.innerHeight - b) + 'px';
     };
     place();
+    try { window.chrome.webview.postMessage('{"type":"zonesAck2","ih":' + window.innerHeight + ',"topH":' + (top ? top.offsetHeight : -1) + ',"botH":' + (bot ? bot.offsetHeight : -1) + '}'); } catch (err) { }
     zonesTimer = setInterval(place, 500);
   }
   function butlerZTheme(v) {
