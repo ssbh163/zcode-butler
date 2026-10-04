@@ -442,7 +442,7 @@
   .usage-pop.on {
     opacity: 1;
     transform: translateX(0);
-    pointer-events: auto;   /* v0.6.2:刷新按钮可点(临时);形状上报随之并入刷新按钮矩形(v0.6.23 只报按钮包络,弹窗背景穿透) */
+    pointer-events: auto;   /* v0.6.2:刷新按钮可点(临时);形状上报整卡矩形(v0.6.24 Rgn 取景框可见性需要) */
   }
   .pop-bubble {
     position: absolute; inset: 0;
@@ -1003,7 +1003,7 @@
     document.getElementById('toastBody').textContent = m.body;
     toastCard.classList.add('on');
     toastCard.setAttribute('aria-hidden', 'false');
-    butlerShapeDirty();
+    butlerReportShape();   /* v0.6.24:显形直报(绕防抖)——Rgn 取景框即时外扩,防过渡期截断 */
   }
   function butlerToastHide(consume) {
     if (!toastCard) return;
@@ -1602,7 +1602,8 @@
         place(meter);
         pop.classList.add('on');
         pop.setAttribute('aria-hidden', 'false');
-        butlerShapeDirty();   /* v0.6.2:弹窗显形 → 矩形并入掩码(刷新按钮可点的前提) */
+        butlerReportShape();   /* v0.6.24:显形直报(绕 520ms 防抖)——宿主 SetWindowRgn 取景框须在
+          显形瞬间外扩,否则动画期弹窗被 Rgn 裁掉;rect 是最终布局,transition 不改 layout,立报即准 */
       }, 90);
     }
     function hide() {
@@ -1615,18 +1616,16 @@
           pop.setAttribute('aria-hidden', 'true');
           butlerShapeDirty();   /* v0.6.2:弹窗隐形 → 矩形退出掩码,区域回穿透 */
         }
-      }, 1200);   /* v0.6.23:弹窗背景退出命中掩码后,环→按钮的飞行段页面收不到
-        鼠标事件(HTTRANSPARENT),收起宽限须覆盖该段(≈300 CSS px 行程);
-        代价:鼠标停在弹窗背景上读内容超时即收,再悬停环即重现 */
+      }, 70);   /* v0.6.24 Rgn 线:取景框(整卡)命中下环→弹窗全程有鼠标事件,
+        保活链完整,70ms 即收——离开后取景框快速缩回,ZCode 恢复交互 */
     }
     meters.forEach(function (m) {
       /* 判定范围 = 整个圆:环本体 + 环内 5h/mcp 字样 + 下方百分比均不丢焦 */
       m.addEventListener('mouseenter', function () { show(m); });
       m.addEventListener('mouseleave', hide);
     });
-    /* v0.6.2:指针移进弹窗本体 = 保活(刷新按钮可达);离开弹窗且宽限内未回环 → 收起。
-       v0.6.23 背景穿透后:mouseenter 只在指针落上刷新按钮(弹窗唯一并入掩码的
-       后代)时触发,保活语义不变;飞出掩码区由宿主补送 MouseLeave 走 hide 宽限 */
+    /* v0.6.2:指针移进弹窗本体 = 保活(刷新按钮可达);离开弹窗且 70ms 内未回环 → 收起。
+       v0.6.24 Rgn 线:取景框=整卡命中,环→弹窗全程鼠标事件不断,保活链完整 */
     pop.addEventListener('mouseenter', function () { clearTimeout(hideT); });
     pop.addEventListener('mouseleave', hide);
     window.addEventListener('resize', function () {
@@ -2285,30 +2284,23 @@
           }
         }
       }
-      /* 通知卡(提案 D)显示时只把按钮行包络并入形状上报(v0.6.23):卡背景区
-         HTTRANSPARENT 穿透不挡 ZCode,「知道了/稍后」矩形并入掩码才可点;
-         隐藏时上报 null,区域回到穿透 */
+      /* 通知卡(提案 D)显示时把整卡矩形并入形状上报:宿主 SetWindowRgn 取景框外扩
+         (v0.6.24 Rgn 线:矩形同时管可见与命中,须报整卡否则卡本体被裁不可见),
+         卡上「知道了/稍后」可点;隐藏时上报 null,取景框缩回、区域回穿透 */
       var toastEl = document.getElementById('toastCard');
       var toastRect = null;
       if (toastEl && toastEl.classList.contains('on')) {
-        var trow = toastEl.querySelector('.row');
-        if (trow) {
-          var tr = trow.getBoundingClientRect();
-          toastRect = [tr.left - 6, tr.top - 6, tr.right + 6, tr.bottom + 6];
-        }
+        var tr = toastEl.getBoundingClientRect();
+        toastRect = [tr.left, tr.top, tr.right, tr.bottom];
       }
-      /* v0.6.23 环详情弹窗显形时同样只报刷新按钮包络(不再报整卡矩形):
-         弹窗背景穿透 → 不挡 ZCode 交互;按钮是弹窗内唯一交互件,矩形并入
-         掩码即可点。指针入窗保活由按钮(pop 后代)的 mouseenter 天然覆盖;
-         隐藏上报 null 回穿透 */
+      /* 环详情弹窗显形时同样报整卡矩形(v0.6.24:Rgn 可见性需要;v0.6.23 的"只报刷新
+         按钮包络"随 Rgn 上线撤销——掩码粒度收窄治不了窗口矩形虚挡,Rgn 治本):
+         弹窗显形 = 取景框外扩(可见+可命中),隐形 = null 缩回回穿透 */
       var popEl = document.getElementById('usagePop');
       var popRect = null;
       if (popEl && popEl.classList.contains('on')) {
-        var rbtn = document.getElementById('popRefresh');
-        if (rbtn) {
-          var pr = rbtn.getBoundingClientRect();
-          popRect = [pr.left - 6, pr.top - 6, pr.right + 6, pr.bottom + 6];
-        }
+        var pr = popEl.getBoundingClientRect();
+        popRect = [pr.left, pr.top, pr.right, pr.bottom];
       }
       try {
         var pb = panel.getBoundingClientRect(), ab = arc ? arc.getBoundingClientRect() : null;

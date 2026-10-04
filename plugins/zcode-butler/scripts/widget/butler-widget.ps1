@@ -521,7 +521,11 @@ public static class ButlerHost {
     int mid = cTop + (cBot - cTop) / 2;
     int botVis = cBot;
     if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
-    return (mid - cTop) <= zh / 3 && (botVis - mid) <= 2 * (zh / 3);
+    // v0.6.24: mirror ApplyFollowGeom's titlebar clamp + bottom check
+    int y = z.Top + zh / 3 - mid;
+    int yMin = z.Top + 70 - cTop;
+    if (y < yMin) y = yMin;
+    return y + botVis + 14 <= z.Bottom;
   }
   private static void ApplyFollowGeom(bool showWhenUp) {
     if (_zHwnd2 == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
@@ -536,12 +540,19 @@ public static class ButlerHost {
     int mid = cTop + (cBot - cTop) / 2;
     int botVis = cBot;
     if (haveShape && _fabR > 0 && _fabY + _fabR > botVis) botVis = _fabY + _fabR;
-    if ((mid - cTop) > zh / 3 || (botVis - mid) > 2 * (zh / 3)) {
+    // v0.6.24 titlebar clamp(实测来源:ZCode 还原矮窗时 1/3 锚定把胶囊带顶推过 ZCode 顶,
+    // 带顶+14px 出血压住标题栏按钮区——按钮中心 z.Top+24、区底 z.Top+40,钳制线取
+    // z.Top+56 含余量):胶囊带顶(y+cTop-14)≥ z.Top+56,矮窗锚定让位整体下移,
+    // 高窗(1/3 处低于钳制线)不变。容纳判定同步改口径:旧"1/3 分段"是 1/3 锚定的
+    // 几何不变式,钳制后失去配伍;新判据 = 带底(y+botVis+14)不越 ZCode 底。
+    int x = z.Right - _fwW2, y = z.Top + zh / 3 - mid;   // capsule center lands at zcodeH/3
+    int yMin = z.Top + 70 - cTop;   // 70 = 56(标题栏避让线)+ 14(Rgn 出血)
+    if (y < yMin) y = yMin;
+    if (y + botVis + 14 > z.Bottom) {
       // overflow: hide; flag only when we did the hiding (manual hotkey hide stays manual)
       if (IsWindowVisible(_hwnd)) { ShowWindow(_hwnd, 0); _sizeHidden = true; }
       return;
     }
-    int x = z.Right - _fwW2, y = z.Top + zh / 3 - mid;   // capsule center lands at zcodeH/3
     SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
     if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
     if (showWhenUp || _sizeHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }
@@ -556,6 +567,7 @@ public static class ButlerHost {
     // Shape landed: visible bottom now known — fit verdict may flip from the
     // conservative full-window fallback to the real (smaller) visible extent.
     try { ApplyFollowGeom(false); } catch { }
+    try { ApplyViewWindow(); } catch { }   // v0.6.24:实体包络裁剪(先撒后设的"设"端)
   }
 
   // v0.5.1:通知卡命中矩形(客户区物理 px,页面 shape.toast × dpr)。卡是胶囊+fab 之外
@@ -565,6 +577,7 @@ public static class ButlerHost {
   public static void SetToastRect(int l, int t, int r, int b) {
     _toastL = l; _toastT = t; _toastR = r; _toastB = b;
     Log(_toastR > _toastL ? ("toast rect=" + l + "," + t + "," + r + "," + b) : "toast rect=off");
+    try { ApplyViewWindow(); } catch { }   // v0.6.24:通知卡进出=取景框外扩/缩回
   }
 
   // v0.6.2:环详情弹窗命中矩形(临时件,随刷新按钮生灭,同 toast 先例):显形期间弹窗
@@ -572,7 +585,66 @@ public static class ButlerHost {
   public static void SetPopRect(int l, int t, int r, int b) {
     _popL = l; _popT = t; _popR = r; _popB = b;
     Log(_popR > _popL ? ("pop rect=" + l + "," + t + "," + r + "," + b) : "pop rect=off");
+    try { ApplyViewWindow(); } catch { }   // v0.6.24:弹窗进出=取景框外扩/缩回(渲染恒在全舞台,零时序)
   }
+
+  // ── v0.6.24 Rgn 动态取景(复活 tag backup-v0620-particles-rgn-line 的 v0.6.19-20 实证线,
+  // 用户 2026-10-05 深夜拍板:窗口矩形常驻虚挡 Chromium 吞输入(2026-10-01 [问题] 条)
+  // 掩码治不了,根治=系统层面拿掉大矩形)。窗口几何/坐标系零改动(全舞台渲染),
+  // SetWindowRgn 把可见+命中区裁成实体包络 = mask pts 包围盒 ∪ fab 圆 ∪ pop ∪ toast
+  // + 14px 出血;Rgn 外系统 hit-test 直接跳过本窗(全屏按钮/点选/复制全恢复)。
+  // 弹窗/通知卡显形 = 包络外扩(渲染恒在全舞台,零时序),隐形 = 缩回。
+  // 已知取舍(用户随 tag 线已接受):Rgn 为矩形带,胶囊月牙空腔点击落页面静默吞。
+  // v0.6.20 两处硬化一并带上:①去重 + redraw=false(每次重设且强制重绘会出
+  // "一条一条瞬间缺失",DComp 跟不上强制重绘,用户实拍指认);②SetFullStage 只记
+  // 全舞台尺寸不立即裁(v0.6.24 改,tag 版此处的立即裁是缩放缺块的另一半根因)。
+  // v0.6.24 顺序纪律(先撒后设,治缩放瞬间缺失):任何改窗口尺寸的 SetWindowPos 之前
+  // 必先 ClearViewRgn()(撒裁剪=整窗),新 shape 到达时 ApplyViewWindow 再精确裁——
+  // 中间态是"多显示本来就透明的区域",视觉零损失;tag 版"resize 后旧 Rgn 裁新几何"
+  // 的中间帧从此不存在。纯 move 不涉(区域坐标是窗口相对,自动跟随)。
+  private static int _fullW2 = 708, _fullH2 = 1050;   // 全舞台渲染尺寸(物理;PS 侧 SetFullStage 校正)
+  [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
+  [DllImport("user32.dll")] private static extern int SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
+  public static void SetFullStage(int fw, int fh) {
+    _fullW2 = fw; _fullH2 = fh;   // 只记值;裁剪等下一个实测 shape(ApplyViewWindow)
+  }
+  public static void ClearViewRgn() {
+    if (_hwnd == IntPtr.Zero) return;
+    _lastRgnL = -1; _lastRgnT = -1; _lastRgnR = -1; _lastRgnB = -1;
+    SetWindowRgn(_hwnd, CreateRectRgn(0, 0, _fullW2, _fullH2), false);   // 撒=整窗不裁
+    Log("viewrgn clear (full stage " + _fullW2 + "x" + _fullH2 + ")");
+  }
+  private static void ApplyViewWindow() {
+    if (_hwnd == IntPtr.Zero) return;
+    int l = int.MaxValue, r2 = int.MinValue, t = int.MaxValue, b2 = int.MinValue;
+    if (_maskN >= 3) {
+      for (int i = 0; i < _maskN; i++) {
+        if (_maskX[i] < l) l = _maskX[i];
+        if (_maskX[i] > r2) r2 = _maskX[i];
+        if (_maskY[i] < t) t = _maskY[i];
+        if (_maskY[i] > b2) b2 = _maskY[i];
+      }
+    }
+    if (_fabR > 0) {
+      l = Math.Min(l, _fabX - _fabR); r2 = Math.Max(r2, _fabX + _fabR);
+      t = Math.Min(t, _fabY - _fabR); b2 = Math.Max(b2, _fabY + _fabR);
+    }
+    if (_popR > _popL) { l = Math.Min(l, _popL); r2 = Math.Max(r2, _popR); t = Math.Min(t, _popT); b2 = Math.Max(b2, _popB); }
+    if (_toastR > _toastL) { l = Math.Min(l, _toastL); r2 = Math.Max(r2, _toastR); t = Math.Min(t, _toastT); b2 = Math.Max(b2, _toastB); }
+    if (l == int.MaxValue) return;   // 形状未到:不裁(全窗,保守)
+    int pad = 14;   // 出血:hairline 描边/星环外逸余量
+    l -= pad; t -= pad; r2 += pad; b2 += pad;
+    if (l < 0) l = 0; if (t < 0) t = 0;
+    if (r2 > _fullW2) r2 = _fullW2; if (b2 > _fullH2) b2 = _fullH2;
+    if (r2 - l <= 0 || b2 - t <= 0) return;
+    if (l == _lastRgnL && t == _lastRgnT && r2 == _lastRgnR && b2 == _lastRgnB) return;   // 去重
+    _lastRgnL = l; _lastRgnT = t; _lastRgnR = r2; _lastRgnB = b2;
+    IntPtr rgn = CreateRectRgn(l, t, r2, b2);
+    SetWindowRgn(_hwnd, rgn, false);
+    Log("viewrgn " + (r2 - l) + "x" + (b2 - t) + " @" + l + "," + t);
+    try { ApplyFollowGeom(false); } catch { }   // Rgn 更新后重锚定(取景框变化不影响,防御性)
+  }
+  private static int _lastRgnL = -1, _lastRgnT = -1, _lastRgnR = -1, _lastRgnB = -1;
 
   private static bool MaskHit(int screenX, int screenY) {
     var p = new POINT { X = screenX, Y = screenY };
@@ -916,13 +988,15 @@ function Attach-Zcode {
   # v0.4.5 帧级跟随 + v0.4.6 1/3 锚定:回调只投递,几何/显隐在 WndProc ApplyFollowGeom 统一算
   try {
     $fw = $script:winW   # v0.4.8 起随弹框放大倍率联动(原硬编码 577)
+    $fh = $script:winH
     $wh0 = Get-WidgetHwnd
     if (([int64]$wh0) -ne 0) {
       $wr0 = New-Object ButlerNative.Win+RECT
       [ButlerNative.Win]::GetWindowRect($wh0, [ref]$wr0) | Out-Null
-      if (($wr0.Right - $wr0.Left) -gt 0) { $fw = $wr0.Right - $wr0.Left }
+      if (($wr0.Right - $wr0.Left) -gt 0) { $fw = $wr0.Right - $wr0.Left; $fh = $wr0.Bottom - $wr0.Top }
     }
     [ButlerHost]::SetFollowParams($hwnd, $fw)
+    [ButlerHost]::SetFullStage($fw, $fh)   # v0.6.24:全舞台尺寸就位(只记值,裁剪等首个 shape)
     [ButlerHost]::HookFollowNow()
   } catch { WLog ('hook-follow THREW: ' + $_.Exception.Message) }
   # v0.4.6:几何参数(_zHwnd2)就位后才能定位——原先此调用在 SetFollowParams 之前,
@@ -1054,8 +1128,12 @@ function Update-UiScale([bool]$force) {
       $script:winH = [int][Math]::Round($script:baseWinH * $s)
       $script:winW = [int][Math]::Ceiling($script:baseWinW * $s)
       try {
+        # v0.6.24 先撒后设:改尺寸前先撒 Rgn(整窗不裁)——杜绝"新尺寸+旧区域"的错误
+        # 裁剪中间帧(tag 线缩放瞬间缺失的根因);新 shape 到达时 ApplyViewWindow 再精确裁
+        [ButlerHost]::ClearViewRgn()
         [ButlerNative.Win]::SetWindowPos((Get-WidgetHwnd), [IntPtr]::Zero, 0, 0, $script:winW, $script:winH, 0x0016) | Out-Null   # NOMOVE|NOZORDER|NOACTIVATE
         [ButlerHost]::SetFollowParams($script:zcodeHwnd, $script:winW)
+        [ButlerHost]::SetFullStage($script:winW, $script:winH)   # 只记全舞台尺寸;裁剪等新 shape
         [ButlerHost]::SyncFollowNow()
         WLog ('ui-scale: ' + $s + ' -> ' + $script:winW + 'x' + $script:winH)
       } catch { WLog ('ui-scale THREW ' + $_.Exception.Message) }
