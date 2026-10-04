@@ -1596,7 +1596,7 @@
       /* v0.6.0 四分发:按 meter 的 data-od-id 渲染对应弹框内容 */
       var kind = String(meter.getAttribute('data-od-id') || '').replace(/^meter-/, '');
       if (POP_TITLES[kind]) renderPop(kind);
-      if (pop.classList.contains('on')) { place(meter); butlerShapeDirty(); return; }  /* 环间滑动不重播,矩形随动重报 */
+      if (pop.classList.contains('on')) { place(meter); butlerReportShape(); return; }  /* 环间滑动不重播;v0.6.28 改直报——四弹窗高度不同(5h 最高),滑动换高度/换 top 后若等 520ms 防抖,新顶部落在旧取景框外被裁(用户实测"5h 顶部缺一条"的根因),直报随裁 */
       clearTimeout(showT);
       showT = setTimeout(function () {
         place(meter);
@@ -2342,6 +2342,10 @@
       });
     }
     window.addEventListener('butler-shape-dirty', function () {
+      /* v0.6.28 双段:立即粗报 + 520ms 精报——防抖窗口期内取景框停留在旧几何,
+         位置/高度已变的元素会露出框外被裁(5h 顶部缺条同族竞态);先粗后精,
+         竞态窗口压到接近零,精报段覆盖动画落定后的最终几何 */
+      butlerReportShape();
       setTimeout(butlerReportShape, 520);
     });
   }
