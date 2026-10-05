@@ -629,6 +629,8 @@ public static class ButlerHost {
   private static int _fullW2 = 708, _fullH2 = 1050;   // 全舞台渲染尺寸(物理;PS 侧 SetFullStage 校正)
   [DllImport("gdi32.dll")] private static extern IntPtr CreateRectRgn(int l, int t, int r, int b);
   [DllImport("user32.dll")] private static extern int SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
+  [DllImport("user32.dll")] private static extern IntPtr SetTimer(IntPtr h, uint id, uint ms, IntPtr proc);
+  [DllImport("user32.dll")] private static extern bool KillTimer(IntPtr h, uint id);
   public static void SetFullStage(int fw, int fh) {
     _fullW2 = fw; _fullH2 = fh;   // 只记值;裁剪等下一个实测 shape(ApplyViewWindow)
   }
@@ -669,12 +671,13 @@ public static class ButlerHost {
     IntPtr rgn = CreateRectRgn(l, t, r2, b2);
     SetWindowRgn(_hwnd, rgn, false);
     Log("viewrgn " + (r2 - l) + "x" + (b2 - t) + " @" + l + "," + t);
-    // v0.6.26:跨屏静默的解除点;v0.6.29 补尺寸终判——跨 DPI 屏时系统对本窗的自动
-    // DPI 缩放与 Update-UiScale 的 SetWindowPos 顺序不定(缩放在后则实际尺寸被再缩
-    // 一次),此刻显示会露出中间态(用户实测 ~50% 概率"变换过程+缺失补全")。判据:
-    // 实际窗口尺寸 ≠ 期望(_fullW2/_fullH2)→ 自愈重设回期望并保持隐藏等下一个
-    // shape(系统缩放只在跨屏瞬间发生一次,重设后必稳定;3 次失配兜底强制解除防
-    // 理论死等);相符才解除恢复显示。
+    // v0.6.26:跨屏静默的解除点;v0.6.29 尺寸终判(系统 DPI 自动缩放竞态);v0.6.30
+    // 再升级为"布局静默"判据——用户演示实测(记录仪+日志):跨屏后页面经 2-3 个布局
+    // 阶段(WebView2 dpr 1.75⇄1.0 过渡,viewrgn 85x579→91x502@330→86x579 三跳),
+    // 只看窗口物理尺寸会在 shape#1(中间布局)放行显示,后续取景框跳变+页面重排
+    // 裸露(=用户看到的"变换过程+缺失补全";4K→2K 中间态偏移 ~57px 最显眼)。
+    // 判据:尺寸不符→自愈重设(3 次兜底);相符→每个新 shape 都重置 220ms 静默计时,
+    // 连续 220ms 无新 shape(布局稳定)才由 WM_TIMER 解除显示。
     if (_scaleHidden) {
       BZRECT sw; GetWindowRectB(_hwnd, out sw);
       int aw = sw.Right - sw.Left, ah = sw.Bottom - sw.Top;
@@ -684,8 +687,8 @@ public static class ButlerHost {
         return;
       }
       _scaleFails = 0;
-      _scaleHidden = false;   // 尺寸已终:跨屏静默结束("变化好了再显示")
-      try { ApplyFollowGeom(true); } catch { }
+      SetTimer(_hwnd, 0x4242, 220, IntPtr.Zero);   // 布局静默计时(同 id 重置;到点 WM_TIMER 解除)
+      return;   // 不在此处显示——等布局静默
     } else {
       try { ApplyFollowGeom(false); } catch { }   // Rgn 更新后重锚定(取景框变化不影响,防御性)
     }
@@ -770,6 +773,14 @@ public static class ButlerHost {
         }
         break;
       case WM_HOTKEY: if (OnHotKey != null) OnHotKey(); return IntPtr.Zero;
+      case 0x0113:   // WM_TIMER: v0.6.30 布局静默判据到期——跨屏后连续 220ms 无新 shape
+        if (((long)wp) == 0x4242 && _scaleHidden) {
+          KillTimer(_hwnd, 0x4242);
+          _scaleHidden = false;
+          Log("scale-settle: quiet 220ms, show");
+          try { ApplyFollowGeom(true); } catch { }
+        }
+        return IntPtr.Zero;
       case WM_APP_FOLLOW2:
         ApplyFollowGeom(false);   // ZCode move/resize: re-anchor at h/3 + overflow check
         return IntPtr.Zero;
