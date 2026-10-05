@@ -2,7 +2,7 @@
 
 ZCode 插件:智谱 GLM Coding Plan 的**账号用量 + 多 Key 监控 + 会话归档(Chat2Doc)+ 活动资讯**四合一管家,附两个桌面悬浮窗。
 
-仓库:<https://github.com/ssbh163/zcode-butler>(当前版本 0.2.25)
+仓库:<https://github.com/ssbh163/zcode-butler>(当前版本以 marketplace.json 与 plugins/zcode-butler/.zcode-plugin/plugin.json 双证为准)
 
 ## 功能一览
 
