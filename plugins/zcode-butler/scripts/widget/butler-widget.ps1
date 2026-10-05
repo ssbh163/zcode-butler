@@ -943,8 +943,8 @@ function Push-Data {
         $v = $null
         if (-not $isDef) {
           $v = [double]$o.v
-          if ($v -lt 0.45) { $v = 0.45 }
-          if ($v -gt 0.65) { $v = 0.65 }
+          if ($v -lt 0.85) { $v = 0.85 }
+          if ($v -gt 1.45) { $v = 1.45 }
         }
         if ($o.win -eq 'stats') {
           $script:statsScaleOverride = $v
@@ -1219,8 +1219,8 @@ function Read-WidgetScaleFile {
   try {
     if (Test-Path $script:scaleJson) {
       $o = Get-Content $script:scaleJson -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-      if ($o -and $o.butler -and [double]$o.butler -le 0.65) { $script:butlerScaleOverride = [double]$o.butler } else { $script:butlerScaleOverride = $null }
-      if ($o -and $o.stats -and [double]$o.stats -le 0.65) { $script:statsScaleOverride = [double]$o.stats } else { $script:statsScaleOverride = $null }
+      if ($o -and $o.butler -and [double]$o.butler -ge 0.85 -and [double]$o.butler -le 1.45) { $script:butlerScaleOverride = [double]$o.butler } else { $script:butlerScaleOverride = $null }
+      if ($o -and $o.stats -and [double]$o.stats -ge 0.85 -and [double]$o.stats -le 1.45) { $script:statsScaleOverride = [double]$o.stats } else { $script:statsScaleOverride = $null }
     }
   } catch { $script:butlerScaleOverride = $null; $script:statsScaleOverride = $null }
 }
@@ -1245,9 +1245,9 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $exp = 0.55                                  # v0.6.35 默认指数
-    if ($null -ne $script:butlerScaleOverride) { $exp = $script:butlerScaleOverride }
-    $s = [Math]::Pow($w / 3840.0, $exp)
+    $n = 1.0                                   # v0.6.37 默认档 N(用户拍板新公式:s=等比×N)
+    if ($null -ne $script:butlerScaleOverride) { $n = $script:butlerScaleOverride }
+    $s = ($w / 3840.0) * $n
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
@@ -1264,10 +1264,10 @@ function Push-ScaleAck {
       if ([ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { $wv = $mi.Monitor.Right - $mi.Monitor.Left }
     }
     if ($wv -le 0) { $wv = 3840 }
-    $be = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride } else { 0.55 }
-    $se = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride } else { 0.55 }
-    $curveB = [Math]::Round([Math]::Pow($wv / 3840.0, $be), 3)
-    $curveS = [Math]::Round([Math]::Pow($wv / 3840.0, $se), 3)
+    $bn = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride } else { 1.0 }
+    $sn = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride } else { 1.0 }
+    $curveB = [Math]::Round(($wv / 3840.0) * $bn, 3)
+    $curveS = [Math]::Round(($wv / 3840.0) * $sn, 3)
     $ic = [System.Globalization.CultureInfo]::InvariantCulture
     $bj = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride.ToString('0.###', $ic) } else { 'null' }
     $sj = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride.ToString('0.###', $ic) } else { 'null' }

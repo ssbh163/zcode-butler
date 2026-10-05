@@ -77,9 +77,9 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [StatsNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $exp = 0.55   # v0.6.35 默认指数(双滑块 5 档 0.45-0.65 调幂曲线指数,与 butler 同)
-    if ($null -ne $script:statsScaleOverride) { $exp = $script:statsScaleOverride }
-    $s = [Math]::Pow($w / 3840.0, $exp)
+    $n = 1.0   # v0.6.37 默认档 N(用户拍板新公式 s=等比×N,与 butler 同)
+    if ($null -ne $script:statsScaleOverride) { $n = $script:statsScaleOverride }
+    $s = ($w / 3840.0) * $n
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
@@ -119,7 +119,7 @@ $script:lastScaleFileLwt = [datetime]::MinValue
 try {
   if (Test-Path $script:scaleJson) {
     $o0 = Get-Content $script:scaleJson -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-    if ($o0 -and $o0.stats -and [double]$o0.stats -le 0.65) { $script:statsScaleOverride = [double]$o0.stats }
+    if ($o0 -and $o0.stats -and [double]$o0.stats -ge 0.85 -and [double]$o0.stats -le 1.45) { $script:statsScaleOverride = [double]$o0.stats }
   }
 } catch { }
 # ---- v0.13i 跨屏切换静默(用户拍板"等变化好了再显示"):检测到屏变化先隐藏,
@@ -757,7 +757,7 @@ $followTimer.Add_Tick({
           $script:lastScaleFileLwt = $sf.LastWriteTimeUtc
           $o = Get-Content $script:scaleJson -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
           $nv = $null
-          if ($o -and $o.stats -and [double]$o.stats -le 0.65) { $nv = [double]$o.stats }
+          if ($o -and $o.stats -and [double]$o.stats -ge 0.85 -and [double]$o.stats -le 1.45) { $nv = [double]$o.stats }
           $cv = $script:statsScaleOverride
           $changed = (($null -eq $nv) -ne ($null -eq $cv)) -or ($null -ne $nv -and $null -ne $cv -and [Math]::Abs($nv - $cv) -gt 0.001)
           if ($changed) { $script:statsScaleOverride = $nv; Switch-StatsScale }
