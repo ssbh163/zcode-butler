@@ -505,6 +505,38 @@ public static class ButlerHost {
       else PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);   // MINIMIZE/SHOW/HIDE -> visibility sync
     } catch { }
   }
+  // ---- v0.6.43 生死绑定提速(用户需求:ZCode 彻底退出时同步消失):内核级进程终止信号 ----
+  // RegisterWaitForSingleObject 在 ZCode 进程句柄被 signaled 的同一瞬间投递回调(threadpool
+  // 线程,零轮询零相位——旧 2.5s 重扫判死均摊 ~1.25s = 用户所见滞后的全部来源);回调只
+  // PostMessage(线程契约同 WinEvent);WndProc 即刻 SW_HIDE(视觉与 ZCode 同帧,清场可慢)。
+  // OpenProcess 失败则看护失效,退回 rescan 2.5s 兜底(行为=旧版,不劣化)。
+  private const uint WM_APP_QUIT2 = 0x8067;
+  [DllImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)] private static extern IntPtr OpenProcessDW(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll", EntryPoint = "RegisterWaitForSingleObject", SetLastError = true)] private static extern bool RegisterWaitForSingleObjectDW(out IntPtr wait, IntPtr h, WaitOrTimerDelegate cb, IntPtr ctx, uint ms, uint flags);
+  [DllImport("kernel32.dll", EntryPoint = "UnregisterWait", SetLastError = true)] private static extern bool UnregisterWaitDW(IntPtr wait);
+  [DllImport("kernel32.dll", EntryPoint = "CloseHandle")] private static extern bool CloseHandleDW(IntPtr h);
+  [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+  private delegate void WaitOrTimerDelegate(IntPtr ctx, bool timedOut);
+  private static IntPtr _zProcHandle, _zProcWait;
+  private static WaitOrTimerDelegate _quitProc;   // 委托常驻防 GC(同 _followProc2)
+  public static Action OnQuit;
+  public static bool SetDeathWatch(uint pid) {
+    ClearDeathWatch();
+    if (pid == 0 || _hwnd == IntPtr.Zero) return false;
+    _zProcHandle = OpenProcessDW(0x00100000 /*PROCESS_SYNCHRONIZE*/, false, pid);
+    if (_zProcHandle == IntPtr.Zero) { try { Log("deathwatch: OpenProcess failed pid=" + pid); } catch { } return false; }
+    _quitProc = OnZcodeDead;
+    if (!RegisterWaitForSingleObjectDW(out _zProcWait, _zProcHandle, _quitProc, IntPtr.Zero, 0xFFFFFFFF /*INFINITE*/, 8 /*WT_EXECUTEONLYONCE*/)) { ClearDeathWatch(); return false; }
+    return true;
+  }
+  public static void ClearDeathWatch() {
+    if (_zProcWait != IntPtr.Zero) { try { UnregisterWaitDW(_zProcWait); } catch { } _zProcWait = IntPtr.Zero; }
+    if (_zProcHandle != IntPtr.Zero) { try { CloseHandleDW(_zProcHandle); } catch { } _zProcHandle = IntPtr.Zero; }
+    _quitProc = null;
+  }
+  private static void OnZcodeDead(IntPtr ctx, bool timedOut) {
+    try { if (_hwnd != IntPtr.Zero) PostMessageB(_hwnd, WM_APP_QUIT2, IntPtr.Zero, IntPtr.Zero); } catch { }
+  }
   // v0.4.7 anchor + overflow: capsule center = ZCode top + zcodeH/3 (2/3 from bottom).
   // Fits when zcodeH/3 >= halfCapsule (top side, binding) AND the visible bottom
   // (capsule + fab) stays under 2/3 zcodeH; otherwise hide and auto re-show on fit.
@@ -812,6 +844,11 @@ public static class ButlerHost {
       case WM_APP_VIS2:
         ApplyFollowGeom(true);    // ZCode min/show/hide: visibility sync (fit-aware)
         return IntPtr.Zero;
+      case WM_APP_QUIT2:
+        // v0.6.43:ZCode 进程已终止(内核句柄 signaled)——先隐身(与 ZCode 视觉同帧)再清场
+        ShowWindow(_hwnd, 0);
+        if (OnQuit != null) { try { OnQuit(); } catch { } }
+        return IntPtr.Zero;
       case WM_SIZE:
         if (_controller != null) {
           long lsz = lp.ToInt64();
@@ -1082,6 +1119,7 @@ function Attach-Zcode {
     [ButlerHost]::SetFollowParams($hwnd, $fw)
     [ButlerHost]::SetFullStage($fw, $fh)   # v0.6.24:全舞台尺寸就位(只记值,裁剪等首个 shape)
     [ButlerHost]::HookFollowNow()
+    if ([ButlerHost]::SetDeathWatch([uint32]$script:zcodePid)) { WLog ('deathwatch: armed pid=' + $script:zcodePid) }   # v0.6.43:进程终止内核信号(窗口重建同 pid 重挂无害)
   } catch { WLog ('hook-follow THREW: ' + $_.Exception.Message) }
   # v0.4.6:几何参数(_zHwnd2)就位后才能定位——原先此调用在 SetFollowParams 之前,
   # C# 侧目标句柄未设置,首次吸附实为 no-op,悬浮窗停在兜底位干等 ZCode 首次移动
@@ -1108,6 +1146,9 @@ function Test-ZcodeAlive {
 # 一切退出路径必须经此函数:关控制器(窗口已毁则跳过,摸死窗口同样 AV)→ 毁窗 → 清资源 → Exit
 function Stop-Widget([string]$reason) {
   WLog ('exit: ' + $reason)
+  # v0.6.43:清场前先隐身——WebView2 Close 可达百 ms 级,窗口亮着做完清场=用户所见的滞后尾巴
+  try { if ([ButlerNative.Win]::IsWindow((Get-WidgetHwnd))) { [void][ButlerHost]::Hide(); WLog 'exit: hidden first' } } catch { }
+  try { [ButlerHost]::ClearDeathWatch() } catch { }
   try {
     if ([ButlerNative.Win]::IsWindow((Get-WidgetHwnd))) {
       [ButlerHost]::Shutdown()
@@ -1250,6 +1291,8 @@ function Update-UiScale([bool]$force) {
 # v0.6.26:C# 帧级屏变化检测的回调(委托常驻,同 Log 模式)——跨屏瞬间立即重设,
 # 不等 rescan 2.5s(静默期 = 检测即时 + 收敛 ~百ms,旧态零露出)
 [ButlerHost]::OnMonChange = { try { Update-UiScale $true } catch { } }
+# v0.6.43 生死绑定提速:ZCode 进程终止的内核信号(WndProc 已先 SW_HIDE)→ 清场退出
+[ButlerHost]::OnQuit = { Stop-Widget 'zcode-process-dead' }
 
 $rescanTimer = New-Object System.Windows.Threading.DispatcherTimer
 $rescanTimer.Interval = [TimeSpan]::FromMilliseconds(2500)

@@ -428,6 +428,37 @@ public static class StatsHost {
     if (_locHook != IntPtr.Zero) { try { UnhookWinEvent2(_locHook); } catch { } _locHook = IntPtr.Zero; }
     _followProc = null;
   }
+  // ---- v0.13o 生死绑定提速(同 butler v0.6.43):内核级 ZCode 进程终止信号 → WndProc 即刻隐身再清场 ----
+  // RegisterWaitForSingleObject 在 ZCode 进程句柄被 signaled 的同一瞬间投递回调(threadpool 线程,
+  // 零轮询零相位——旧 2.5s 重扫判死均摊 ~1.25s = 滞后来源);回调只 PostMessage(线程契约同
+  // WinEvent);OpenProcess 失败则看护失效,退回 rescan 2.5s 兜底(行为=旧版,不劣化)。
+  private const uint WM_APP_QUIT = 0x8065;
+  [DllImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)] private static extern IntPtr OpenProcessX(uint access, bool inherit, uint pid);
+  [DllImport("kernel32.dll", EntryPoint = "RegisterWaitForSingleObject", SetLastError = true)] private static extern bool RegisterWaitForSingleObjectX(out IntPtr wait, IntPtr h, WaitOrTimerDelegate cb, IntPtr ctx, uint ms, uint flags);
+  [DllImport("kernel32.dll", EntryPoint = "UnregisterWait", SetLastError = true)] private static extern bool UnregisterWaitX(IntPtr wait);
+  [DllImport("kernel32.dll", EntryPoint = "CloseHandle")] private static extern bool CloseHandleX(IntPtr h);
+  [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+  private delegate void WaitOrTimerDelegate(IntPtr ctx, bool timedOut);
+  private static IntPtr _zProcHandle, _zProcWait;
+  private static WaitOrTimerDelegate _quitProc;   // 委托常驻防 GC(同 _followProc)
+  public static Action OnQuit;
+  public static bool SetDeathWatch(uint pid) {
+    ClearDeathWatch();
+    if (pid == 0 || _hwnd == IntPtr.Zero) return false;
+    _zProcHandle = OpenProcessX(0x00100000 /*PROCESS_SYNCHRONIZE*/, false, pid);
+    if (_zProcHandle == IntPtr.Zero) { try { Log("deathwatch: OpenProcess failed pid=" + pid); } catch { } return false; }
+    _quitProc = OnZcodeDead;
+    if (!RegisterWaitForSingleObjectX(out _zProcWait, _zProcHandle, _quitProc, IntPtr.Zero, 0xFFFFFFFF /*INFINITE*/, 8 /*WT_EXECUTEONLYONCE*/)) { ClearDeathWatch(); return false; }
+    return true;
+  }
+  public static void ClearDeathWatch() {
+    if (_zProcWait != IntPtr.Zero) { try { UnregisterWaitX(_zProcWait); } catch { } _zProcWait = IntPtr.Zero; }
+    if (_zProcHandle != IntPtr.Zero) { try { CloseHandleX(_zProcHandle); } catch { } _zProcHandle = IntPtr.Zero; }
+    _quitProc = null;
+  }
+  private static void OnZcodeDead(IntPtr ctx, bool timedOut) {
+    try { if (_hwnd != IntPtr.Zero) PostMessageW(_hwnd, WM_APP_QUIT, IntPtr.Zero, IntPtr.Zero); } catch { }
+  }
   // 可视帧底边(DWM ExtendedFrameBounds):最大化/普通状态一致——窗口矩形含不可见
   // 缩放边框(最大化超出可视区 ~12px,普通状态内缩 ~8px),拿它当锚会随缩放状态漂移
   public static int VisibleBottom() {
@@ -493,6 +524,11 @@ public static class StatsHost {
       case WM_APP_FOLLOW:
         SetWindowPos(_hwnd, IntPtr.Zero, wp.ToInt32(), lp.ToInt32(), 0, 0, 0x0015);
         return IntPtr.Zero;
+      case WM_APP_QUIT:
+        // v0.13o:ZCode 进程已终止(内核句柄 signaled)——先隐身(与 ZCode 视觉同帧)再清场
+        ShowWindow(_hwnd, 0);
+        if (OnQuit != null) { try { OnQuit(); } catch { } }
+        return IntPtr.Zero;
       case WM_SIZE:
         if (_controller != null) {
           // v0.6.14 同构防御:(IntPtr)→int 显式转换在值 >int.MaxValue 时抛 OverflowException
@@ -536,6 +572,8 @@ WLog ('boot: init ' + $initX + ',' + $initY + ' ' + $script:winW + 'x' + $script
   if ([StatsHost]::Visible) { [StatsHost]::Hide(); WLog 'hotkey: hide(Ctrl+Alt+S)' }
   else { [StatsHost]::Show(); WLog 'hotkey: show(Ctrl+Alt+S)' }
 }
+# v0.13o 生死绑定提速:ZCode 进程终止的内核信号(WndProc 已先 SW_HIDE)→ 清场退出
+[StatsHost]::OnQuit = { Stop-Widget 'zcode-process-dead' }
 
 # ---- 页面消息:回执日志(主题应用/相位切换等) ----
 [StatsHost]::OnMessage = {
@@ -663,6 +701,7 @@ function Attach-Zcode {
   # 帧级跟随:LOCATIONCHANGE → WndProc SetWindowPos;位置 = 窗口顶边居中,C# 动态算
   try { [StatsHost]::SetFollowParams($hwnd, $script:winW, $script:winH) } catch { }
   try { [StatsHost]::HookFollowNow() } catch { WLog ('hook-follow THREW: ' + $_.Exception.Message) }
+  if ([StatsHost]::SetDeathWatch([uint32]$script:zcodePid)) { WLog ('deathwatch: armed pid=' + $script:zcodePid) }   # v0.13o:进程终止内核信号
   Place-TopCenter
   if (-not [StatsNative.Win]::IsIconic($hwnd) -and [StatsNative.Win]::IsWindowVisible($hwnd) -and -not [StatsHost]::Visible) {
     [StatsHost]::Show(); WLog 'sm: show(attach)'
@@ -685,6 +724,9 @@ function Test-ZcodeAlive {
 
 function Stop-Widget([string]$reason) {
   WLog ('exit: ' + $reason)
+  # v0.13o:清场前先隐身(同 butler v0.6.43)——WebView2 Close 可达百 ms 级,窗口亮着做完清场=滞后尾巴
+  try { if ([StatsNative.Win]::IsWindow(([StatsHost]::Handle))) { [void][StatsHost]::Hide(); WLog 'exit: hidden first' } } catch { }
+  try { [StatsHost]::ClearDeathWatch() } catch { }
   try {
     if ([StatsNative.Win]::IsWindow(([StatsHost]::Handle))) {
       [StatsHost]::Shutdown()
