@@ -99,8 +99,7 @@ function Switch-StatsScale {
       [StatsHost]::SetFollowParams($script:zcodeHwnd, $nw, $nh)
       Place-TopCenter
     } catch { WLog ('scale-switch resize THREW ' + $_.Exception.Message) }
-    $dpi = [StatsNative.Win]::GetDpiForWindow([StatsHost]::Handle)
-    if ($dpi -le 0) { $dpi = 168 }
+    $dpi = Get-EffectiveDpi   # v0.13m:屏 DPI 源
     $z = [Math]::Round($s * 1.75 / ($dpi / 96.0), 3)
     if ($z -ne $script:curZoom) {
       $script:curZoom = $z
@@ -130,6 +129,20 @@ try {
 # 类型在依赖加载前不可解析(New-Object 语句级抛错不杀脚本但留下 $null,曾致
 # 跨屏 Hide 后显示链全断=胶囊永隐,2026-10-05 实测定位) ----
 $script:scaleHidden = $false
+function Get-EffectiveDpi {
+  # v0.13m:zoom 的 DPI 源改屏 DPI——GetDpiForWindow 在跨屏过渡期读到中间值(实测 144,稳态 168),
+  # 错 zoom 永久滞留致内容溢出(用户实测胶囊显示不完全);屏属性静态即查即准,窗口 DPI 仅兜底
+  try {
+    $mon = [StatsNative.Win]::MonitorFromWindow($script:zcodeHwnd, 1)
+    if ($mon -ne [IntPtr]::Zero) {
+      $dx = [uint32]0; $dy = [uint32]0
+      if ([StatsNative.Win]::GetDpiForMonitor($mon, 0, [ref]$dx, [ref]$dy) -eq 0 -and $dx -gt 0) { return [int]$dx }
+    }
+  } catch { }
+  $d = [StatsNative.Win]::GetDpiForWindow([StatsHost]::Handle)
+  if ($d -le 0) { $d = 168 }
+  return $d
+}
 function Update-UiScale([bool]$force) {
   try {
     if (([int64]$script:zcodeHwnd) -eq 0) { return }
@@ -160,8 +173,7 @@ function Update-UiScale([bool]$force) {
         Place-TopCenter
       } catch { WLog ('ui-scale resize THREW ' + $_.Exception.Message) }
       # 页面 zoom:内容布局 ×(scale×1.75/dpr)——呈现物理 = 基准×scale
-      $dpi = [StatsNative.Win]::GetDpiForWindow([StatsHost]::Handle)
-      if ($dpi -le 0) { $dpi = 168 }
+      $dpi = Get-EffectiveDpi   # v0.13m:屏 DPI 源(GetDpiForWindow 跨屏过渡期读中间值,错 zoom 永久滞留)
       $z = [Math]::Round($s * 1.75 / ($dpi / 96.0), 3)
       if ($force -or $z -ne $script:curZoom) {
         $script:curZoom = $z
@@ -230,6 +242,7 @@ public delegate void WinEventProc(IntPtr hHook, uint evt, IntPtr hwnd, int idObj
 [DllImport("kernel32.dll")] public static extern bool TerminateProcess(IntPtr h, uint exitCode);
 [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr h, int attr, out RECT r, int cb);
 [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+[DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr hmon, int type, out uint dpiX, out uint dpiY);   // v0.13m:屏 DPI(静态,不随窗口跨屏过渡)
 [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr h, ref MONITORINFOEX mi);
 [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
 public struct MONITORINFOEX { public int cbSize; public RECT Monitor; public RECT WorkArea; public uint Flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string DeviceName; }
@@ -829,6 +842,15 @@ $rescanTimer.Add_Tick({
     }
     # v0.13h 屏幕等比:ZCode 跨屏(monitor 变化)即重算 scale 并推 zoom
     Update-UiScale $false
+    # v0.13m zoom 终判:跨屏过渡期若仍有错 zoom 滞留(历史污染/极端时序),在此复查修正(幂等)
+    try {
+      $zExp = [Math]::Round($script:uiScale * 1.75 / ((Get-EffectiveDpi) / 96.0), 3)
+      if ($script:curZoom -gt 0 -and [Math]::Abs($zExp - $script:curZoom) -gt 0.004) {
+        $script:curZoom = $zExp
+        [StatsHost]::PostJson(('{"type":"zoom","v":' + $zExp.ToString('0.###', [System.Globalization.CultureInfo]::InvariantCulture) + '}'))
+        WLog ('zoom-finalize: ' + $zExp)
+      }
+    } catch { }
     # v0.13g:UIA 探针/看门狗退役(定位改窗口矩形;探针文件保留在仓库不再拉起,回退=恢复拉起段)
   } finally { $script:rescanBusy = $false }
 })
