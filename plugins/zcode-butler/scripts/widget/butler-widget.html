@@ -1684,7 +1684,7 @@
     var keys = (d.keys || []).filter(function (k) { return k.status !== 'error'; });
     var top = keys.length ? keys[0] : null;
     butlerSetRing('key', top ? top.pct : null, !!top);
-    /* 悬停中的弹窗随新数据即时刷新(refresh 周期 110min,常态无感);
+    /* 悬停中的弹窗随新数据即时刷新(refresh 周期 5min,悬停中每 5 分钟换新数据重渲染);
        新数据到达同时复位临时刷新按钮 */
     var pop = document.getElementById('usagePop');
     if (pop && pop.classList.contains('on') && popKind) renderPop(popKind);

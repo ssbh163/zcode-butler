@@ -63,7 +63,7 @@
 #   双错:引用未定义 --track(实为 --ring-track)致零描边 + 1.5 舞台px 本就亚像素。
 # v0.6.2:弹窗临时刷新按钮(zcode-watch ↻ 同款语义)+ Key 取消高峰×3:
 #   ①页面弹窗头加「↻ 刷新」按钮,postMessage {type:'refresh'} → 宿主 Invoke-Refresh
-#     立即重跑 status.mjs(110 分钟周期外的手动通道,治数据陈旧);
+#     立即重跑 status.mjs(5 分钟周期外的手动通道,治数据陈旧);
 #   ②弹窗显形期间矩形并入命中掩码(shape.pop → SetPopRect → MaskHit,同 toast 先例),
 #     按钮可点、指针入窗保活(meter leave 70ms 宽限),隐藏即回穿透——临时件,接自动
 #     刷新方案后随按钮整体移除;
@@ -161,7 +161,7 @@ function WLog($m) { try { Add-Content -Path $dbgLog -Value ("{0} {1}" -f (Get-Da
 function WLogRaw($m) { try { [IO.File]::AppendAllText($dbgLog, [DateTime]::Now.ToString('MM-dd HH:mm:ss') + ' ' + $m + [char]13 + [char]10) } catch { } }   # 全 .NET:ProcessExit/原生回调期 cmdlet 不可用
 
 $script:dockMode = 'zcode-right'
-$script:refreshMinutes = 110
+$script:refreshMinutes = 5   # v0.6.42(0.2.68)用户拍板:110→5 分钟(数据陈旧主因;butler.json widget.refreshMinutes 仍可覆盖)
 try {
   $c = Get-Content $configFile -Raw | ConvertFrom-Json
   if ($c -and $c.widget) {
@@ -1003,7 +1003,7 @@ $collectTimer.Add_Tick({
   if ($trimmed.EndsWith('}')) {
     try {
       $d = $trimmed | ConvertFrom-Json
-      if ($d -and $d.protocolVersion) { $script:data = $d; Push-Data }
+      if ($d -and $d.protocolVersion) { $script:data = $d; WLog ('data: fetchedAt ' + $d.fetchedAt); Push-Data }
     } catch { WLog ('parse THREW: ' + $_.Exception.Message) }
   }
 })
@@ -1011,7 +1011,7 @@ $collectTimer.Start()
 
 $refreshTimer = New-Object System.Windows.Threading.DispatcherTimer
 $refreshTimer.Interval = [TimeSpan]::FromMinutes($script:refreshMinutes)
-$refreshTimer.Add_Tick({ Invoke-Refresh })
+$refreshTimer.Add_Tick({ WLog 'refresh: timer tick'; Invoke-Refresh })   # v0.6.42:tick 落日志(旧版定时刷新无痕迹,排障无法回看)
 $refreshTimer.Start()
 
 # =====================================================================
