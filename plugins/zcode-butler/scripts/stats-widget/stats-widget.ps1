@@ -77,13 +77,51 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [StatsNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $s = $w / 3840.0
+    $s = [Math]::Pow($w / 3840.0, 0.55)   # v0.6.34 默认=B 幂曲线(用户拍板,两窗同曲线)
+    if ($null -ne $script:statsScaleOverride) { $s = $script:statsScaleOverride }
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
 }
+# v0.6.34 override 可见切换(同屏即时看到大小;不走 Update-UiScale 的静默 Hide)
+function Switch-StatsScale {
+  try {
+    if (([int64]$script:zcodeHwnd) -eq 0) { return }
+    $s = Get-ScreenScaleOf $script:zcodeHwnd
+    if ($s -eq $script:uiScale) { return }
+    $script:uiScale = $s
+    $nw = [int][Math]::Ceiling($script:baseWinW * $s)
+    $nh = [int][Math]::Ceiling($script:baseWinH * $s)
+    $script:winW = $nw; $script:winH = $nh
+    try {
+      [StatsNative.Win]::SetWindowPos([StatsHost]::Handle, [IntPtr]::Zero, 0, 0, $nw, $nh, 0x0016) | Out-Null
+      [StatsHost]::SetFollowParams($script:zcodeHwnd, $nw, $nh)
+      Place-TopCenter
+    } catch { WLog ('scale-switch resize THREW ' + $_.Exception.Message) }
+    $dpi = [StatsNative.Win]::GetDpiForWindow([StatsHost]::Handle)
+    if ($dpi -le 0) { $dpi = 168 }
+    $z = [Math]::Round($s * 1.75 / ($dpi / 96.0), 3)
+    if ($z -ne $script:curZoom) {
+      $script:curZoom = $z
+      try { [StatsHost]::PostJson(('{"type":"zoom","v":' + $z.ToString('0.###', [System.Globalization.CultureInfo]::InvariantCulture) + '}')); WLog ('scale-switch: s=' + $s + ' win=' + $nw + 'x' + $nh + ' zoom=' + $z) } catch { }
+    }
+  } catch { }
+}
 $script:lastScaleMon = [IntPtr]::Zero
 $script:curZoom = 0.0
+# ---- v0.6.34 显示大小(用户拍板):默认=B 幂曲线(等比^0.55,与 butler 同);override
+# 经 %LOCALAPPDATA%\zcode-butler\runtime\widget-scale.json 轮询(butler 设置弹框双滑块
+# 的 stats 通道,butler 宿主唯一写者);边界 [0.55,1.30] 由写侧钳制 ----
+$script:scaleJson = Join-Path $env:LOCALAPPDATA 'zcode-butler\runtime\widget-scale.json'
+$script:statsScaleOverride = $null
+$script:lastScaleFileCheck = (Get-Date)
+$script:lastScaleFileLwt = [datetime]::MinValue
+try {
+  if (Test-Path $script:scaleJson) {
+    $o0 = Get-Content $script:scaleJson -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+    if ($o0 -and $o0.stats) { $script:statsScaleOverride = [double]$o0.stats }
+  }
+} catch { }
 # ---- v0.13i 跨屏切换静默(用户拍板"等变化好了再显示"):检测到屏变化先隐藏,
 # resize+zoom 推送后由一次性 timer(600ms)收敛显示(zoomApplied 回执通道 C# 侧
 # 只 Log 未转发,定时最省);显隐兜底被 $script:scaleHidden 压制防提前翻回。
@@ -695,6 +733,23 @@ $followTimer = New-Object System.Windows.Threading.DispatcherTimer
 $followTimer.Interval = [TimeSpan]::FromMilliseconds(100)   # v0.13g:锚 40ms stat 链退役,降频;只做 metrics 推送 + 主题采样 + 显隐兜底
 $followTimer.Add_Tick({
   try {
+    # v0.6.34 override 文件轮询(500ms 节流;butler 设置弹框双滑块的 stats 通道)——
+    # mtime 变化才重读,override 值真变才可见切换
+    if (((Get-Date) - $script:lastScaleFileCheck).TotalMilliseconds -ge 500) {
+      $script:lastScaleFileCheck = Get-Date
+      try {
+        $sf = Get-Item $script:scaleJson -ErrorAction SilentlyContinue
+        if ($sf -and $sf.LastWriteTimeUtc -ne $script:lastScaleFileLwt) {
+          $script:lastScaleFileLwt = $sf.LastWriteTimeUtc
+          $o = Get-Content $script:scaleJson -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+          $nv = $null
+          if ($o -and $o.stats) { $nv = [double]$o.stats }
+          $cv = $script:statsScaleOverride
+          $changed = (($null -eq $nv) -ne ($null -eq $cv)) -or ($null -ne $nv -and $null -ne $cv -and [Math]::Abs($nv - $cv) -gt 0.001)
+          if ($changed) { $script:statsScaleOverride = $nv; Switch-StatsScale }
+        }
+      } catch { }
+    }
     # v0.13i 跨屏检测提速:100ms 粒度查 ZCode 所在屏(rescan 2.5s 只兜生死/重吸附),
     # 变化即走 Update-UiScale 静默重设——旧态胶囊零露出
     if (([int64]$script:zcodeHwnd) -ne 0 -and [StatsNative.Win]::IsWindow($script:zcodeHwnd)) {

@@ -1198,36 +1198,57 @@
     popHeadLogo.innerHTML = BM_LOGO_INNER;
   }
 
-  /* ── v0.6.33 显示大小档位(设置弹框内容):B 方案试大小切换器,三档即时生效 ── */
-  window.butlerScaleMode = 'b';   /* 页面侧缓存(宿主回执刷新) */
-  var SCALE_MODES = [
-    { id: 'legacy', name: '等比缩小', desc: '屏宽/3840(4K=1,2K≈0.67)' },
-    { id: 'b',      name: '平滑放大', desc: '等比^0.55(4K=1,2K≈0.80)·推荐' },
-    { id: 'full',   name: '4K 原始大小', desc: '任何屏恒 1.0' }
-  ];
+  /* ── v0.6.34 显示大小双滑块(设置弹框内容):用量面板/性能胶囊各自自由调整,
+     边界 0.55-1.30,默认=幂曲线 B(等比^0.55,屏相关);override 跨屏保持+重启保持
+     (宿主持久化 %LOCALAPPDATA%\zcode-butler\runtime\widget-scale.json);
+     性能胶囊经文件通道由本窗宿主代写、stats 侧轮询应用 ── */
+  window.butlerScaleOv = null;   /* null=默认曲线 */
+  window.statsScaleOv = null;
+  window.butlerScaleCur = 1;     /* 当前屏默认曲线值(回执刷新) */
+  window.statsScaleCur = 1;
+  function scaleValTxt(ov, cur) {
+    return '×' + (ov != null ? ov : cur).toFixed(2) + (ov != null ? '' : ' ·默认');
+  }
   function renderScaleModeHtml() {
     var body = document.getElementById('popContent');
     if (!body) return;
-    var cur = window.butlerScaleMode, btn = '';
-    for (var i = 0; i < SCALE_MODES.length; i++) {
-      var m = SCALE_MODES[i], on = (m.id === cur);
-      btn += '<button type="button" data-scalemode="' + m.id + '" style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*6);align-items:flex-start;'
-        + 'padding:calc(var(--pu,0.5px)*14) calc(var(--pu,0.5px)*20);border-radius:999px;cursor:pointer;font-family:inherit;'
-        + 'border:calc(var(--pu,0.5px)*2.6) solid ' + (on ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.14)') + ';'
-        + 'background:' + (on ? 'rgba(255,255,255,0.10)' : 'transparent') + ';'
-        + 'color:' + (on ? '#fff' : '#c9c9c9') + '">'
-        + '<span style="font-size:calc(var(--pu,0.5px)*28);font-weight:700">' + m.name + (on ? ' ·当前' : '') + '</span>'
-        + '<span style="font-size:calc(var(--pu,0.5px)*22);opacity:0.72">' + m.desc + '</span></button>';
+    function slider(id, name, ov, cur) {
+      var val = ov != null ? ov : cur;
+      return '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*6)">'
+        + '<div style="display:flex;justify-content:space-between;align-items:baseline">'
+        + '<span style="font-size:calc(var(--pu,0.5px)*26);font-weight:700;color:#fff">' + name + '</span>'
+        + '<span id="' + id + 'Val" style="font-size:calc(var(--pu,0.5px)*22);color:#c9c9c9">' + scaleValTxt(ov, cur) + '</span>'
+        + '</div>'
+        + '<input type="range" id="' + id + '" min="0.55" max="1.30" step="0.05" value="' + val + '" '
+        + 'style="width:100%;accent-color:#fff;cursor:pointer;height:calc(var(--pu,0.5px)*32)">'
+        + '</div>';
     }
-    body.innerHTML = '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*14)">'
-      + '<div style="font-size:calc(var(--pu,0.5px)*20);color:#a8a8a8;line-height:1.5">非 4K 屏上面板与弹框的大小档位,点击即时生效,跨屏保持:</div>'
-      + btn + '</div>';
+    body.innerHTML = '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*16)">'
+      + '<div style="font-size:calc(var(--pu,0.5px)*20);color:#a8a8a8;line-height:1.5">拖动滑块调整两个悬浮窗大小,即时生效、跨屏保持(默认=平滑放大曲线):</div>'
+      + slider('smButler', '用量面板', window.butlerScaleOv, window.butlerScaleCur)
+      + slider('smStats', '性能胶囊', window.statsScaleOv, window.statsScaleCur)
+      + '<button type="button" id="smReset" style="align-self:flex-start;padding:calc(var(--pu,0.5px)*8) calc(var(--pu,0.5px)*18);border-radius:999px;cursor:pointer;font-family:inherit;border:calc(var(--pu,0.5px)*2) solid rgba(255,255,255,0.2);background:transparent;color:#c9c9c9;font-size:calc(var(--pu,0.5px)*20)">恢复默认</button>'
+      + '</div>';
+    wireScaleSliders();
   }
-  document.addEventListener('click', function (e) {
-    var t = e.target && e.target.closest ? e.target.closest('[data-scalemode]') : null;
-    if (!t) return;
-    try { window.chrome.webview.postMessage('{"type":"scalemode","mode":"' + t.getAttribute('data-scalemode') + '"}'); } catch (err) { }
-  });
+  function wireScaleSliders() {
+    var lastSent = {};
+    function send(win, v, isDefault) {
+      try { window.chrome.webview.postMessage('{"type":"scale","win":"' + win + '","v":' + (isDefault ? '"default"' : v) + '}'); } catch (err) { }
+    }
+    [['smButler', 'butler'], ['smStats', 'stats']].forEach(function (p) {
+      var el = document.getElementById(p[0]);
+      if (!el) return;
+      el.addEventListener('input', function () {
+        var v = parseFloat(el.value), lab = document.getElementById(p[0] + 'Val'), now = Date.now();
+        if (lab) lab.textContent = '×' + v.toFixed(2);
+        if (!lastSent[p[1]] || now - lastSent[p[1]] >= 80) { lastSent[p[1]] = now; send(p[1], v, false); }
+      });
+      el.addEventListener('change', function () { send(p[1], parseFloat(el.value), false); });
+    });
+    var rs = document.getElementById('smReset');
+    if (rs) rs.addEventListener('click', function () { send('butler', 0, true); send('stats', 0, true); });
+  }
 
   function renderPop(kind) {
     var body = document.getElementById('popContent');
@@ -2273,12 +2294,18 @@
         } else if (msg && msg.type === 'ztheme') {
           /* v0.6.15 星空主题门控:宿主边沿推送的 ZCode 实况主题(深色才启粒子) */
           butlerZTheme(msg.v);
-        } else if (msg && msg.type === 'scalemode') {
-          /* v0.6.33:档位切换回执——刷新缓存与设置弹框高亮 */
-          window.butlerScaleMode = msg.mode || 'b';
+        } else if (msg && msg.type === 'scaleack') {
+          /* v0.6.34:双滑块回执——刷新缓存与设置弹框;拖动中(activeElement 为滑块)
+             跳过重渲染,防重建 DOM 打断拖拽 */
+          window.butlerScaleOv = (msg.butler == null) ? null : msg.butler;
+          window.statsScaleOv = (msg.stats == null) ? null : msg.stats;
+          window.butlerScaleCur = msg.butlerCur;
+          window.statsScaleCur = msg.statsCur;
           try {
             var _pop = document.getElementById('usagePop');
-            if (popKind === 'gear' && _pop && _pop.classList.contains('on')) renderScaleModeHtml();
+            var _ae = document.activeElement;
+            var _dragging = _ae && (_ae.id === 'smButler' || _ae.id === 'smStats');
+            if (popKind === 'gear' && _pop && _pop.classList.contains('on') && !_dragging) renderScaleModeHtml();
           } catch (err) { }
         }
       } catch (err) { }

@@ -934,14 +934,32 @@ function Push-Data {
         Invoke-Refresh
       }
     }
-    elseif ($msg -like '{"type":"scalemode"*') {
-      # v0.6.33 显示大小档位(设置弹框入口)→ 同屏可见切换并回执(页面刷新高亮)
+    elseif ($msg -like '{"type":"scale"*') {
+      # v0.6.34 双滑块:win=butler 即时应用;win=stats 仅写文件(stats 轮询应用);
+      # v="default" 清 override 回曲线默认
       try {
-        $mo = ($msg | ConvertFrom-Json).mode
-        Switch-ScaleMode ([string]$mo)
-      } catch { WLog ('scalemode msg THREW: ' + $_.Exception.Message) }
+        $o = $msg | ConvertFrom-Json
+        $isDef = ($o.v -eq 'default' -or $null -eq $o.v)
+        $v = $null
+        if (-not $isDef) {
+          $v = [double]$o.v
+          if ($v -lt 0.55) { $v = 0.55 }
+          if ($v -gt 1.30) { $v = 1.30 }
+        }
+        if ($o.win -eq 'stats') {
+          $script:statsScaleOverride = $v
+          Write-WidgetScaleFile
+          WLog ('scale: stats -> ' + $(if ($null -ne $v) { $v } else { 'default' }))
+          Push-ScaleAck
+        } else {
+          $script:butlerScaleOverride = $v
+          Write-WidgetScaleFile
+          WLog ('scale: butler -> ' + $(if ($null -ne $v) { $v } else { 'default' }))
+          Switch-WidgetScale
+        }
+      } catch { WLog ('scale msg THREW: ' + $_.Exception.Message) }
     }
-    elseif ($msg -like '*ready*') { $script:pageReady = $true; Push-Data; Push-ZTheme }
+    elseif ($msg -like '*ready*') { $script:pageReady = $true; Push-Data; Push-ZTheme; Push-ScaleAck }   # v0.6.34:滑块初值随 ready 下发
     # v0.4.9:drag 消息路由已删——面板固定 1/3 锚定,页面侧拖动桥同除,此消息不再出现
   } catch { }
 }
@@ -1190,10 +1208,33 @@ function Push-ZTheme {
 # v0.6.17 屏幕等比(实现):窗口物理 = 基准 × scale,SetWindowPos 调尺寸不动位置;
 # WM_SIZE 自动同步 WebView2 Bounds,页面 --u 舞台自适应与 shape 掩码全实测自动跟随
 $script:lastScaleMon = [IntPtr]::Zero
-# ---- v0.6.33 显示大小档位(用户拍板 B 方案试用,设置弹框入口) ----
-# legacy = 纯等比(屏宽/3840,v0.6.17 原样);b = 平滑放大(等比^0.55,4K 恒 1、2K≈0.80);
-# full = 恒 4K 原始大小。默认 b;跨屏档位保持(内存态,重启回默认——拍板后写死默认值)
-$script:scaleMode = 'b'
+# ---- v0.6.34 显示大小:双滑块自由调整(用户拍板) ----
+# 默认 = 幂曲线 B(等比^0.55:4K=1,2K≈0.80,两窗同默认);override = 用户滑块值(绝对值,
+# 跨屏/重启保持),边界 [0.55,1.30] 防过大过小;持久化 %LOCALAPPDATA%\zcode-butler\
+# runtime\widget-scale.json(本宿主唯一写者);stats 侧 override 经此文件轮询应用。
+$script:scaleJson = Join-Path $env:LOCALAPPDATA 'zcode-butler\runtime\widget-scale.json'
+$script:butlerScaleOverride = $null
+$script:statsScaleOverride = $null
+function Read-WidgetScaleFile {
+  try {
+    if (Test-Path $script:scaleJson) {
+      $o = Get-Content $script:scaleJson -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
+      if ($o -and $o.butler) { $script:butlerScaleOverride = [double]$o.butler } else { $script:butlerScaleOverride = $null }
+      if ($o -and $o.stats) { $script:statsScaleOverride = [double]$o.stats } else { $script:statsScaleOverride = $null }
+    }
+  } catch { $script:butlerScaleOverride = $null; $script:statsScaleOverride = $null }
+}
+function Write-WidgetScaleFile {
+  try {
+    $dir = Split-Path $script:scaleJson -Parent
+    if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
+    $ic = [System.Globalization.CultureInfo]::InvariantCulture
+    $parts = @()
+    if ($null -ne $script:butlerScaleOverride) { $parts += ('"butler":' + $script:butlerScaleOverride.ToString('0.###', $ic)) }
+    if ($null -ne $script:statsScaleOverride) { $parts += ('"stats":' + $script:statsScaleOverride.ToString('0.###', $ic)) }
+    Set-Content -Path $script:scaleJson -Value ('{' + ($parts -join ',') + '}') -Encoding ASCII
+  } catch { WLog ('scale-file write THREW: ' + $_.Exception.Message) }
+}
 function Get-ScreenScaleOf([IntPtr]$hwnd) {
   try {
     if ($hwnd -eq [IntPtr]::Zero) { return 1.0 }
@@ -1204,38 +1245,53 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $s = $w / 3840.0
-    if ($script:scaleMode -eq 'b') { $s = [Math]::Pow($s, 0.55) }
-    elseif ($script:scaleMode -eq 'full') { $s = 1.0 }
+    $s = [Math]::Pow($w / 3840.0, 0.55)          # v0.6.34 默认=B 幂曲线
+    if ($null -ne $script:butlerScaleOverride) { $s = $script:butlerScaleOverride }
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
 }
-# 档位切换:同屏**可见**切换(不走 Update-UiScale 的 Hide 防御——那是跨屏静默的配套,
-# 同屏无 _scaleHidden 置位会隐藏后无人解除;此处让用户即时看到大小变化)
-function Switch-ScaleMode([string]$mode) {
+function Push-ScaleAck {
+  # 回执:两窗 override 态 + 当前屏曲线值(两窗同屏,butler 算的 B 值对 stats 同样成立)
   try {
-    if ($mode -ne 'legacy' -and $mode -ne 'b' -and $mode -ne 'full') { $mode = 'b' }
-    $script:scaleMode = $mode
-    if (([int64]$script:zcodeHwnd) -ne 0) {
-      $s = Get-ScreenScaleOf $script:zcodeHwnd
-      $script:uiScale = $s
-      $script:winH = [int][Math]::Round($script:baseWinH * $s)
-      $script:winW = [int][Math]::Ceiling($script:baseWinW * $s)
-      try {
-        [ButlerHost]::ClearViewRgn()   # 先撒后设(同 Update-UiScale 顺序纪律)
-        [ButlerNative.Win]::SetWindowPos((Get-WidgetHwnd), [IntPtr]::Zero, 0, 0, $script:winW, $script:winH, 0x0016) | Out-Null
-        [ButlerHost]::SetFollowParams($script:zcodeHwnd, $script:winW)
-        [ButlerHost]::SetFullStage($script:winW, $script:winH)
-        [ButlerHost]::SyncFollowNow()
-        $dpiNew = [ButlerNative.Win]::GetDpiForWindow((Get-WidgetHwnd))
-        if ($dpiNew -gt 0) { [ButlerHost]::SetWantDpr([Math]::Round($dpiNew / 96.0, 3)) }
-        WLog ('scale-mode: ' + $mode + ' s=' + $s + ' win=' + $script:winW + 'x' + $script:winH)
-      } catch { WLog ('scale-mode THREW ' + $_.Exception.Message) }
-    } else { WLog ('scale-mode: ' + $mode + ' (no zcode yet)') }
-    try { [ButlerHost]::PostJson(('{"type":"scalemode","mode":"' + $script:scaleMode + '"}')) } catch { }
+    if (([int64]$script:zcodeHwnd) -eq 0) { return }
+    $mon = [ButlerNative.Win]::MonitorFromWindow($script:zcodeHwnd, 1)
+    $wv = 3840
+    if ($mon -ne [IntPtr]::Zero) {
+      $mi = New-Object ButlerNative.Win+MONITORINFOEX
+      $mi.cbSize = [System.Runtime.InteropServices.Marshal]::SizeOf($mi)
+      if ([ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { $wv = $mi.Monitor.Right - $mi.Monitor.Left }
+    }
+    if ($wv -le 0) { $wv = 3840 }
+    $curve = [Math]::Round([Math]::Pow($wv / 3840.0, 0.55), 3)
+    $ic = [System.Globalization.CultureInfo]::InvariantCulture
+    $bj = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride.ToString('0.###', $ic) } else { 'null' }
+    $sj = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride.ToString('0.###', $ic) } else { 'null' }
+    [ButlerHost]::PostJson(('{"type":"scaleack","butler":' + $bj + ',"stats":' + $sj + ',"butlerCur":' + $curve + ',"statsCur":' + $curve + '}'))
   } catch { }
 }
+# 可见切换(同屏即时看到大小变化;不走 Update-UiScale——其 Hide 防御是跨屏静默配套,
+# 同屏无 _scaleHidden 置位会隐藏后无人解除)
+function Switch-WidgetScale {
+  try {
+    if (([int64]$script:zcodeHwnd) -eq 0) { return }
+    $s = Get-ScreenScaleOf $script:zcodeHwnd
+    $script:uiScale = $s
+    $script:winH = [int][Math]::Round($script:baseWinH * $s)
+    $script:winW = [int][Math]::Ceiling($script:baseWinW * $s)
+    try {
+      [ButlerHost]::ClearViewRgn()   # 先撒后设(顺序纪律)
+      [ButlerNative.Win]::SetWindowPos((Get-WidgetHwnd), [IntPtr]::Zero, 0, 0, $script:winW, $script:winH, 0x0016) | Out-Null
+      [ButlerHost]::SetFollowParams($script:zcodeHwnd, $script:winW)
+      [ButlerHost]::SetFullStage($script:winW, $script:winH)
+      [ButlerHost]::SyncFollowNow()
+      $dpiNew = [ButlerNative.Win]::GetDpiForWindow((Get-WidgetHwnd))
+      if ($dpiNew -gt 0) { [ButlerHost]::SetWantDpr([Math]::Round($dpiNew / 96.0, 3)) }
+    } catch { WLog ('scale-switch THREW ' + $_.Exception.Message) }
+    Push-ScaleAck
+  } catch { }
+}
+Read-WidgetScaleFile
 function Update-UiScale([bool]$force) {
   try {
     if (([int64]$script:zcodeHwnd) -eq 0) { return }
