@@ -1232,7 +1232,6 @@
     wireScaleSliders();
   }
   function wireScaleSliders() {
-    var lastSent = {};
     function send(win, v, isDefault) {
       try { window.chrome.webview.postMessage('{"type":"scale","win":"' + win + '","v":' + (isDefault ? '"default"' : v) + '}'); } catch (err) { }
     }
@@ -1240,9 +1239,11 @@
       var el = document.getElementById(p[0]);
       if (!el) return;
       el.addEventListener('input', function () {
-        var v = parseFloat(el.value), lab = document.getElementById(p[0] + 'Val'), now = Date.now();
-        if (lab) lab.textContent = '×' + v.toFixed(2);
-        if (!lastSent[p[1]] || now - lastSent[p[1]] >= 80) { lastSent[p[1]] = now; send(p[1], v, false); }
+        /* v0.6.34 修:拖动只更新标签,松手(change)才应用——本窗滑块实时调本窗大小会令
+           弹框(含滑块)自身缩放,鼠标与滑块相对位置持续漂移=拖拽跳变握不住(用户实测);
+           松手应用,窗口/弹框一次性切到新大小 */
+        var lab = document.getElementById(p[0] + 'Val');
+        if (lab) lab.textContent = '×' + parseFloat(el.value).toFixed(2);
       });
       el.addEventListener('change', function () { send(p[1], parseFloat(el.value), false); });
     });
