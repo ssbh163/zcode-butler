@@ -631,6 +631,12 @@ public static class ButlerHost {
   [DllImport("user32.dll")] private static extern int SetWindowRgn(IntPtr h, IntPtr rgn, bool redraw);
   [DllImport("user32.dll")] private static extern IntPtr SetTimer(IntPtr h, uint id, uint ms, IntPtr proc);
   [DllImport("user32.dll")] private static extern bool KillTimer(IntPtr h, uint id);
+  // v0.6.31:跨屏布局静默的 dpr 判据——shape 消息自带页面 dpr,WebView2 的 DPI 过渡期
+  // 中间布局 dpr 还是旧屏值(18:37:07 实测:shape#1 dpr=1.75 旧值,终态才 1.0);页面
+  // dpr 未同步到新屏前不起静默计时(形状间隔可超 220ms,纯计时会被旧布局骗过)
+  private static double _wantDpr = 1.75, _shapeDpr = 1.75;
+  public static void SetWantDpr(double d) { _wantDpr = d; }
+  public static void SetShapeDpr(double d) { if (d > 0) _shapeDpr = d; }
   public static void SetFullStage(int fw, int fh) {
     _fullW2 = fw; _fullH2 = fh;   // 只记值;裁剪等下一个实测 shape(ApplyViewWindow)
   }
@@ -687,6 +693,15 @@ public static class ButlerHost {
         return;
       }
       _scaleFails = 0;
+      // v0.6.31:页面 dpr 必须已同步到新屏才起静默计时(旧 dpr 的中间布局间隔可超
+      // 220ms,纯计时会被骗过——18:37:07 实测 settle 放行后 shape#2/#3 才到);
+      // dpr 迟迟不同步超 2s 则兜底放行(防理论死等)
+      if (Math.Abs(_shapeDpr - _wantDpr) > 0.01) {
+        if (_dprWaitSince == 0) _dprWaitSince = Environment.TickCount;
+        if (Environment.TickCount - _dprWaitSince < 2000) return;
+        Log("scale-settle: dpr wait timeout, force");
+      }
+      _dprWaitSince = 0;
       SetTimer(_hwnd, 0x4242, 220, IntPtr.Zero);   // 布局静默计时(同 id 重置;到点 WM_TIMER 解除)
       return;   // 不在此处显示——等布局静默
     } else {
@@ -695,6 +710,7 @@ public static class ButlerHost {
   }
   private static int _lastRgnL = -1, _lastRgnT = -1, _lastRgnR = -1, _lastRgnB = -1;
   private static int _scaleFails;
+  private static int _dprWaitSince;
 
   private static bool MaskHit(int screenX, int screenY) {
     var p = new POINT { X = screenX, Y = screenY };
@@ -860,6 +876,7 @@ function Push-Data {
       try {
         $o = $msg | ConvertFrom-Json
         $script:pageDpr = [double]$o.dpr
+        try { [ButlerHost]::SetShapeDpr($script:pageDpr) } catch { }   # v0.6.31:跨屏布局静默的 dpr 判据(WebView2 DPI 过渡期的中间布局 dpr 还是旧屏值)
         $script:shapeCapsule = @($o.capsule)
         $script:shapeFabC = @($o.fabC)
         $script:shapeFabR = [double]$o.fabR
@@ -1197,6 +1214,8 @@ function Update-UiScale([bool]$force) {
         [ButlerHost]::SetFollowParams($script:zcodeHwnd, $script:winW)
         [ButlerHost]::SetFullStage($script:winW, $script:winH)   # 只记全舞台尺寸;裁剪等新 shape
         [ButlerHost]::SyncFollowNow()
+        $dpiNew = [ButlerNative.Win]::GetDpiForWindow((Get-WidgetHwnd))
+        if ($dpiNew -gt 0) { [ButlerHost]::SetWantDpr([Math]::Round($dpiNew / 96.0, 3)) }   # v0.6.31:布局静默的 dpr 判据(必须在 SyncFollowNow move 过屏后读才是新屏值;NOMOVE resize 时窗口还在旧屏)
         WLog ('ui-scale: ' + $s + ' -> ' + $script:winW + 'x' + $script:winH)
       } catch { WLog ('ui-scale THREW ' + $_.Exception.Message) }
     } elseif ($force -or $monChanged) {
