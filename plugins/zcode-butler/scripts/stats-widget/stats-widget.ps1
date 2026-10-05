@@ -77,8 +77,9 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [StatsNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $s = 0.55   # v0.6.36 默认档(绝对倍率,用户拍板;屏宽不再参与)
-    if ($null -ne $script:statsScaleOverride) { $s = $script:statsScaleOverride }
+    $exp = 0.55   # v0.6.35 默认指数(双滑块 5 档 0.45-0.65 调幂曲线指数,与 butler 同)
+    if ($null -ne $script:statsScaleOverride) { $exp = $script:statsScaleOverride }
+    $s = [Math]::Pow($w / 3840.0, $exp)
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
