@@ -128,7 +128,7 @@
   body[data-edge="rainbow"] .fab svg {
     filter: drop-shadow(0 0 4px hsl(var(--rh) 100% 65% / 0.55))
             drop-shadow(0 0 11px hsl(var(--rh) 100% 65% / 0.28));
-    animation: rainbow-hue 6s linear infinite;
+    animation: rainbow-hue 6s steps(30) infinite;   /* 优化试验:量化降重绘率(5Hz,12°/步);linear 跑满刷新率实测 ~70% 一核 */
   }
   body[data-edge="input"] { --panel: #2b2b2b; --ring-track: #363636; }
   /* 键盘预览态(仅 ?edge= 时挂载):HUD + ZCode 明暗背景模拟;宿主无查询串永不出现 */
@@ -1749,7 +1749,9 @@
     function makeHost(cfg) {   /* cfg: {paths:[..], pick:fn->idx, root, cx, cy, count, rate(ms), lref}
         v0.6.13 多路径:每帧按 pick() 选当前路径(粒子按 f=0..1 比例分布,换路径无缝),
         活跃粒子数随路径长缩放(activeN = count × L/lref,短弧自动减密度);
-        v0.6.15 起每条路径预采样为 tabs[i](径向向量随点烘焙进表,host 不再存 cx/cy) */
+        v0.6.15 起每条路径预采样为 tabs[i](径向向量随点烘焙进表,host 不再存 cx/cy);
+        优化试验:cfg.canvas 时走 canvas 渲染(免 90×4 attr 变异/帧的样式失效链,
+        每帧一次位图合成;坐标映射复刻 svg viewBox 语义 = uniform scale + 居中) */
       var ps = [], j;
       function seed(f0) {
         return {
@@ -1760,45 +1762,82 @@
           tw: 0.35 + Math.random() * 0.55
         };
       }
-      for (j = 0; j < cfg.count; j++) {
-        var c = document.createElementNS(NS, 'circle');
-        c.setAttribute('fill', '#ffffff');
-        cfg.root.appendChild(c);
-        ps.push({ el: c, s: seed(j / cfg.count) });
+      var ctx = null;
+      if (cfg.canvas) {
+        ctx = cfg.canvas.getContext('2d');
+        for (j = 0; j < cfg.count; j++) ps.push({ s: seed(j / cfg.count) });
+      } else {
+        for (j = 0; j < cfg.count; j++) {
+          var c = document.createElementNS(NS, 'circle');
+          c.setAttribute('fill', '#ffffff');
+          cfg.root.appendChild(c);
+          ps.push({ el: c, s: seed(j / cfg.count) });
+        }
       }
       var tabs = [];
       for (j = 0; j < cfg.paths.length; j++) tabs.push(buildTable(cfg.paths[j], cfg.cx, cfg.cy));
       return { tabs: tabs, pick: cfg.pick, root: cfg.root,
+               cv: cfg.canvas || null, ctx: ctx, cw: 0, ch: 0, cdpr: 0, vbw: cfg.vbw || 430, vbh: cfg.vbh || 2025,
                lref: cfg.lref, ps: ps, spk: null, spkAt: 0, rate: cfg.rate };
     }
     var SP = { x: 0, y: 0, nx: 0, ny: 0 };
     function frameOf(h, now, dt) {
       var tb = h.tabs[h.pick()];
       var active = Math.max(6, Math.min(h.ps.length, Math.round(h.ps.length * tb.L / h.lref)));
+      var ctx = h.ctx, cvs = null;
+      if (ctx) {
+        var dpr = window.devicePixelRatio || 1;
+        cvs = { w: h.cv.clientWidth, h: h.cv.clientHeight };
+        if (cvs.w > 0 && cvs.h > 0 && (cvs.w !== h.cw || cvs.h !== h.ch || dpr !== h.cdpr)) {
+          h.cw = cvs.w; h.ch = cvs.h; h.cdpr = dpr;
+          h.cv.width = Math.round(cvs.w * dpr); h.cv.height = Math.round(cvs.h * dpr);
+        }
+        if (h.cw > 0) {
+          var sc = Math.min(h.cw / h.vbw, h.ch / h.vbh);
+          ctx.setTransform(dpr * sc, 0, 0, dpr * sc, dpr * (h.cw - h.vbw * sc) / 2, dpr * (h.ch - h.vbh * sc) / 2);
+          ctx.clearRect(-90, -90, h.vbw + 180, h.vbh + 180);   /* 外逸星屑最大行程 ~48 + 余量 */
+          ctx.fillStyle = '#ffffff';
+        } else ctx = null;
+      }
       for (var k = 0; k < h.ps.length; k++) {
         var p = h.ps[k], s = p.s;
-        if (k >= active) { p.el.setAttribute('opacity', 0); continue; }
+        if (k >= active) { if (!ctx) p.el.setAttribute('opacity', 0); continue; }
         s.f += (s.v / tb.L) * dt;
         if (s.f < 0) s.f += 1; else if (s.f > 1) s.f -= 1;
         sample(tb, s.f, SP);
         var off = 4 + s.amp * Math.sin(now / 1000 * s.fq * 6.283 + s.ph);
         var op = s.tw * (0.55 + 0.45 * Math.sin(now / 1000 * 2.2 + s.ph * 3));
-        p.el.setAttribute('cx', (SP.x + SP.nx * off).toFixed(1));
-        p.el.setAttribute('cy', (SP.y + SP.ny * off).toFixed(1));
-        p.el.setAttribute('r', s.r.toFixed(2));
-        p.el.setAttribute('opacity', Math.max(0, op).toFixed(2));
+        if (ctx) {
+          ctx.globalAlpha = Math.max(0, op);
+          ctx.beginPath();
+          ctx.arc(SP.x + SP.nx * off, SP.y + SP.ny * off, s.r, 0, 6.2832);
+          ctx.fill();
+        } else {
+          p.el.setAttribute('cx', (SP.x + SP.nx * off).toFixed(1));
+          p.el.setAttribute('cy', (SP.y + SP.ny * off).toFixed(1));
+          p.el.setAttribute('r', s.r.toFixed(2));
+          p.el.setAttribute('opacity', Math.max(0, op).toFixed(2));
+        }
       }
       if (!h.spk && now - h.spkAt > h.rate) {
         h.spkAt = now;
-        var c2 = document.createElementNS(NS, 'circle');
-        c2.setAttribute('fill', '#ffffff'); h.root.appendChild(c2);
         sample(tb, Math.random(), SP);
-        h.spk = { el: c2, x: SP.x, y: SP.y, ux: SP.nx, uy: SP.ny, life: 1, r: 2.2 + Math.random() * 1.6 };
+        var spkEl = null;
+        if (!ctx) {
+          spkEl = document.createElementNS(NS, 'circle');
+          spkEl.setAttribute('fill', '#ffffff'); h.root.appendChild(spkEl);
+        }
+        h.spk = { el: spkEl, x: SP.x, y: SP.y, ux: SP.nx, uy: SP.ny, life: 1, r: 2.2 + Math.random() * 1.6 };
       }
       if (h.spk) {
         h.spk.x += h.spk.ux * 26 * dt; h.spk.y += h.spk.uy * 26 * dt; h.spk.life -= dt / 1.6;
-        if (h.spk.life <= 0) { h.spk.el.remove(); h.spk = null; }
-        else {
+        if (h.spk.life <= 0) { if (h.spk.el) h.spk.el.remove(); h.spk = null; }
+        else if (ctx) {
+          ctx.globalAlpha = h.spk.life * 0.8;
+          ctx.beginPath();
+          ctx.arc(h.spk.x, h.spk.y, h.spk.r * h.spk.life, 0, 6.2832);
+          ctx.fill();
+        } else {
           h.spk.el.setAttribute('cx', h.spk.x.toFixed(1)); h.spk.el.setAttribute('cy', h.spk.y.toFixed(1));
           h.spk.el.setAttribute('r', (h.spk.r * h.spk.life).toFixed(2));
           h.spk.el.setAttribute('opacity', (h.spk.life * 0.8).toFixed(2));
@@ -1809,12 +1848,15 @@
     var panel = document.getElementById('panelPath');
     var fabSvg = document.querySelector('.fab svg');
     if (wrap && panel) {
-      var svg = document.createElementNS(NS, 'svg');
-      svg.setAttribute('viewBox', '0 0 430 2025');
-      svg.setAttribute('width', '430'); svg.setAttribute('height', '2025');
-      svg.style.cssText = 'position:absolute;inset:0;pointer-events:none;z-index:3;';
-      wrap.insertBefore(svg, wrap.querySelector('.meter'));
-      edgeStarHosts.push(makeHost({ paths: [panel], pick: function () { return 0; }, root: svg,
+      /* 优化试验:面板粒子层 SVG circles → canvas 单层(SVG 版见 git;观感逐像素等价:
+         同白圆/同透明度/同正弦漂移,viewBox 映射复刻 meet 语义)。
+         尺寸纪律:canvas 是替换元素,inset:0 不会撑满(布局尺寸取自身 backing 属性→
+         "backing=client×dpr"每帧 ×dpr 指数 runaway 实测冲到 33.5M 上限=粒子不可见+巨幅开销),
+         必须显式 width/height:100% 锚定容器 */
+      var cv = document.createElement('canvas');
+      cv.style.cssText = 'position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;z-index:3;';
+      wrap.insertBefore(cv, wrap.querySelector('.meter'));
+      edgeStarHosts.push(makeHost({ paths: [panel], pick: function () { return 0; }, root: cv, canvas: cv,
         cx: 365, cy: 920, count: 90, rate: 500, lref: panel.getTotalLength() }));
     }
     if (fabSvg) {
