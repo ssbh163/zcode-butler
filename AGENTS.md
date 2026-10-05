@@ -121,6 +121,7 @@ node -e "const a=require('./marketplace.json').plugins[0].version,b=require('./p
 - 假设脚本可能被非 shell 环境拉起(PATH 为空):查找 node 等外部依赖时内置多候选路径探测,不只试 PATH
 - 任何失败路径给出"缺什么、去哪装、点哪里"的明确指引,禁止静默吞错或返回神秘错误码
 - 悬浮窗新增交互控件时,检查窗口级全局事件(拖拽 DragMove / 热键 / 事件冒泡)是否拦截该控件的点击
+- **跨屏场景读 DPI 一律用屏源(MonitorFromWindow(目标窗)→GetDpiForMonitor),禁用 GetDpiForWindow 作判据或参数源**(双窗两次踩:stats v0.13m zoom 滞留致内容裁边、butler v0.6.38 wantDpr 脏值致 settle 提前显示后再跳):窗口跨屏移动刚完成瞬间 GetDpiForWindow 返回**旧屏值**(实测 4K→2K 滞留 168),它读的是窗口过渡态而非屏属性;窗口 DPI 仅作兜底
 - **Agent 工具链自陷阱(悬浮窗 v0.2~v0.3 反复发生,全部实测)**:
   - bash 调 PowerShell 内联命令,双引号嵌套转义会静默弄坏命令且看起来"跑过了"——复杂调用一律 `-File` 脚本文件,内联只允许单行无嵌套引号
   - **禁止用 py heredoc / `py -c` 做文件内容替换**(转义与编码双重陷阱,三次事故);改文件只用编辑工具,改完核验
