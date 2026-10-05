@@ -116,7 +116,9 @@
   body[data-edge="glow"] #panelPath,
   body[data-edge="glow"] .fab .disc > circle:first-child,
   body[data-edge="rainbow"] #panelPath,
-  body[data-edge="rainbow"] .fab .disc > circle:first-child { stroke: none; }
+  body[data-edge="rainbow"] .fab .disc > circle:first-child,
+  body.fx-rainbow #panelPath,
+  body.fx-rainbow .fab .disc > circle:first-child { stroke: none; }
   body[data-edge="glow"] .panel-svg,
   body[data-edge="glow"] .fab svg {
     filter: drop-shadow(0 0 3.4px rgba(255, 255, 255, 0.32));
@@ -125,10 +127,12 @@
   @property --rh { syntax: '<angle>'; inherits: false; initial-value: 0deg; }
   @keyframes rainbow-hue { to { --rh: 360deg; } }
   body[data-edge="rainbow"] .panel-svg,
-  body[data-edge="rainbow"] .fab svg {
+  body[data-edge="rainbow"] .fab svg,
+  body.fx-rainbow .panel-svg,
+  body.fx-rainbow .fab svg {
     filter: drop-shadow(0 0 4px hsl(var(--rh) 100% 65% / 0.55))
             drop-shadow(0 0 11px hsl(var(--rh) 100% 65% / 0.28));
-    animation: rainbow-hue 6s steps(30) infinite;   /* 优化试验:量化降重绘率(5Hz,12°/步);linear 跑满刷新率实测 ~70% 一核 */
+    animation: rainbow-hue 6s steps(30) infinite;   /* v0.6.41 生产默认:量化 5Hz/12°步(净开销 ~6.1%;linear 满刷新率 ~69%) */
   }
   body[data-edge="input"] { --panel: #2b2b2b; --ring-track: #363636; }
   /* 键盘预览态(仅 ?edge= 时挂载):HUD + ZCode 明暗背景模拟;宿主无查询串永不出现 */
@@ -1903,9 +1907,13 @@
     applyStarsByTheme();
   }
   function applyStarsByTheme() {
-    if (document.body.dataset.edge) return;   /* 预览态(?edge= 已设 dataset.edge) */
+    if (document.body.dataset.edge) return;   /* 预览态(?edge= 已设 dataset.edge,生产类不计入) */
+    /* v0.6.41(用户拍板):深色特效生产默认 = 彩虹 steps(30)(净开销 ~6.1%,全场最省档);
+       粒子引擎(canvas 版)退役出生产,保留在 ?edge=stars 预览随时可切回;
+       走独立 fx-rainbow 类,勿复用 dataset.edge(那是预览守卫通道,复用会堵死浅色清除) */
     var rm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    if (zThemeDark && !rm) edgeStarsStart(); else edgeStarsStop();
+    edgeStarsStop();
+    document.body.classList.toggle('fx-rainbow', zThemeDark && !rm);
   }
   /* ── 眼睛表情引擎(v0.6.12 单瞳重构):用户定稿「整个大黑圆=眼球,白圈=瞳孔」——
      眼睛即按钮本体:黑盘 r76.5 为眼球(原生元素,不动),白圈(瞳)成为独立可动层
