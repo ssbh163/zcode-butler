@@ -576,8 +576,15 @@ public static class ButlerHost {
       if (IsWindowVisible(_hwnd)) { ShowWindow(_hwnd, 0); _sizeHidden = true; }
       return;
     }
-    SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
-    if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
+    // v0.6.32:位置未变则跳过 move+NotifyParentWindowPositionChanged——后者无条件调用
+    // 会令 WebView2 整视口重栅格化,弹框环间滑动的每次 shape 直报(v0.6.28)都会触发
+    // 本函数,ZCode 最大化(4K 大视口)下重栅格化昂贵 = 用户实测"全屏弹框切换卡、
+    // 非全屏丝滑"的根因;同位跳过后滑动链路对窗口零操作(跨屏/拖动时位置真变,重
+    // 栅格化保留——cross-dpi re-raster 语义不变)
+    if (w.Left != x || w.Top != y) {
+      SetWindowPos(_hwnd, IntPtr.Zero, x, y, 0, 0, 0x0015);
+      if (_controller != null) { try { _controller.NotifyParentWindowPositionChanged(); } catch { } }   // cross-dpi re-raster
+    }
     if ((showWhenUp || _sizeHidden) && !_scaleHidden) { _sizeHidden = false; ShowWindow(_hwnd, 8 /*SW_SHOWNA*/); }   // v0.6.26:_scaleHidden 一票否决(跨屏静默中,只有新 shape 裁好 Rgn 才解除)
   }
   public static void PostJson(string json) {
@@ -682,8 +689,8 @@ public static class ButlerHost {
     // 阶段(WebView2 dpr 1.75⇄1.0 过渡,viewrgn 85x579→91x502@330→86x579 三跳),
     // 只看窗口物理尺寸会在 shape#1(中间布局)放行显示,后续取景框跳变+页面重排
     // 裸露(=用户看到的"变换过程+缺失补全";4K→2K 中间态偏移 ~57px 最显眼)。
-    // 判据:尺寸不符→自愈重设(3 次兜底);相符→每个新 shape 都重置 220ms 静默计时,
-    // 连续 220ms 无新 shape(布局稳定)才由 WM_TIMER 解除显示。
+    // 判据:尺寸不符→自愈重设(3 次兜底);相符→每个新 shape 都重置 400ms 静默计时,
+    // 连续 400ms 无新 shape(布局稳定)才由 WM_TIMER 解除显示。
     if (_scaleHidden) {
       BZRECT sw; GetWindowRectB(_hwnd, out sw);
       int aw = sw.Right - sw.Left, ah = sw.Bottom - sw.Top;
@@ -702,7 +709,7 @@ public static class ButlerHost {
         Log("scale-settle: dpr wait timeout, force");
       }
       _dprWaitSince = 0;
-      SetTimer(_hwnd, 0x4242, 220, IntPtr.Zero);   // 布局静默计时(同 id 重置;到点 WM_TIMER 解除)
+      SetTimer(_hwnd, 0x4242, 400, IntPtr.Zero);   // 布局静默计时(同 id 重置;到点 WM_TIMER 解除)
       return;   // 不在此处显示——等布局静默
     } else {
       try { ApplyFollowGeom(false); } catch { }   // Rgn 更新后重锚定(取景框变化不影响,防御性)
@@ -789,7 +796,7 @@ public static class ButlerHost {
         }
         break;
       case WM_HOTKEY: if (OnHotKey != null) OnHotKey(); return IntPtr.Zero;
-      case 0x0113:   // WM_TIMER: v0.6.30 布局静默判据到期——跨屏后连续 220ms 无新 shape
+      case 0x0113:   // WM_TIMER: v0.6.30 布局静默判据到期——跨屏后连续 400ms 无新 shape
         if (((long)wp) == 0x4242 && _scaleHidden) {
           KillTimer(_hwnd, 0x4242);
           _scaleHidden = false;
