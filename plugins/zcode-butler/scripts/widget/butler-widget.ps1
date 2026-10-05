@@ -669,16 +669,29 @@ public static class ButlerHost {
     IntPtr rgn = CreateRectRgn(l, t, r2, b2);
     SetWindowRgn(_hwnd, rgn, false);
     Log("viewrgn " + (r2 - l) + "x" + (b2 - t) + " @" + l + "," + t);
-    // v0.6.26:跨屏静默的解除点——新 shape 已把取景框裁好,此刻恢复显示即"变化好了再
-    // 显示";showWhenUp=true 走显示分支(此时 _scaleHidden 已清,不再被否决)
+    // v0.6.26:跨屏静默的解除点;v0.6.29 补尺寸终判——跨 DPI 屏时系统对本窗的自动
+    // DPI 缩放与 Update-UiScale 的 SetWindowPos 顺序不定(缩放在后则实际尺寸被再缩
+    // 一次),此刻显示会露出中间态(用户实测 ~50% 概率"变换过程+缺失补全")。判据:
+    // 实际窗口尺寸 ≠ 期望(_fullW2/_fullH2)→ 自愈重设回期望并保持隐藏等下一个
+    // shape(系统缩放只在跨屏瞬间发生一次,重设后必稳定;3 次失配兜底强制解除防
+    // 理论死等);相符才解除恢复显示。
     if (_scaleHidden) {
-      _scaleHidden = false;
+      BZRECT sw; GetWindowRectB(_hwnd, out sw);
+      int aw = sw.Right - sw.Left, ah = sw.Bottom - sw.Top;
+      if ((aw != _fullW2 || ah != _fullH2) && ++_scaleFails <= 3) {
+        SetWindowPos(_hwnd, IntPtr.Zero, 0, 0, _fullW2, _fullH2, 0x0016);
+        Log("scale-finalize mismatch " + aw + "x" + ah + " -> " + _fullW2 + "x" + _fullH2 + " (stay hidden)");
+        return;
+      }
+      _scaleFails = 0;
+      _scaleHidden = false;   // 尺寸已终:跨屏静默结束("变化好了再显示")
       try { ApplyFollowGeom(true); } catch { }
     } else {
       try { ApplyFollowGeom(false); } catch { }   // Rgn 更新后重锚定(取景框变化不影响,防御性)
     }
   }
   private static int _lastRgnL = -1, _lastRgnT = -1, _lastRgnR = -1, _lastRgnB = -1;
+  private static int _scaleFails;
 
   private static bool MaskHit(int screenX, int screenY) {
     var p = new POINT { X = screenX, Y = screenY };
