@@ -1245,9 +1245,8 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $exp = 0.55                                  # v0.6.35 默认指数
-    if ($null -ne $script:butlerScaleOverride) { $exp = $script:butlerScaleOverride }
-    $s = [Math]::Pow($w / 3840.0, $exp)
+    $s = 0.55                                    # v0.6.36 默认档(绝对倍率,用户拍板;屏宽不再参与)
+    if ($null -ne $script:butlerScaleOverride) { $s = $script:butlerScaleOverride }
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
@@ -1264,10 +1263,8 @@ function Push-ScaleAck {
       if ([ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { $wv = $mi.Monitor.Right - $mi.Monitor.Left }
     }
     if ($wv -le 0) { $wv = 3840 }
-    $be = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride } else { 0.55 }
-    $se = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride } else { 0.55 }
-    $curveB = [Math]::Round([Math]::Pow($wv / 3840.0, $be), 3)
-    $curveS = [Math]::Round([Math]::Pow($wv / 3840.0, $se), 3)
+    $curveB = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride } else { 0.55 }
+    $curveS = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride } else { 0.55 }
     $ic = [System.Globalization.CultureInfo]::InvariantCulture
     $bj = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride.ToString('0.###', $ic) } else { 'null' }
     $sj = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride.ToString('0.###', $ic) } else { 'null' }
