@@ -943,8 +943,8 @@ function Push-Data {
         $v = $null
         if (-not $isDef) {
           $v = [double]$o.v
-          if ($v -lt 0.55) { $v = 0.55 }
-          if ($v -gt 1.30) { $v = 1.30 }
+          if ($v -lt 0.45) { $v = 0.45 }
+          if ($v -gt 0.65) { $v = 0.65 }
         }
         if ($o.win -eq 'stats') {
           $script:statsScaleOverride = $v
@@ -1208,7 +1208,7 @@ function Push-ZTheme {
 # v0.6.17 屏幕等比(实现):窗口物理 = 基准 × scale,SetWindowPos 调尺寸不动位置;
 # WM_SIZE 自动同步 WebView2 Bounds,页面 --u 舞台自适应与 shape 掩码全实测自动跟随
 $script:lastScaleMon = [IntPtr]::Zero
-# ---- v0.6.34 显示大小:双滑块自由调整(用户拍板) ----
+# ---- v0.6.35 显示大小:双滑块调幂曲线指数(用户拍板 5 档 0.45/0.50/0.55 默认/0.60/0.65) ----
 # 默认 = 幂曲线 B(等比^0.55:4K=1,2K≈0.80,两窗同默认);override = 用户滑块值(绝对值,
 # 跨屏/重启保持),边界 [0.55,1.30] 防过大过小;持久化 %LOCALAPPDATA%\zcode-butler\
 # runtime\widget-scale.json(本宿主唯一写者);stats 侧 override 经此文件轮询应用。
@@ -1219,8 +1219,8 @@ function Read-WidgetScaleFile {
   try {
     if (Test-Path $script:scaleJson) {
       $o = Get-Content $script:scaleJson -Raw -ErrorAction SilentlyContinue | ConvertFrom-Json
-      if ($o -and $o.butler) { $script:butlerScaleOverride = [double]$o.butler } else { $script:butlerScaleOverride = $null }
-      if ($o -and $o.stats) { $script:statsScaleOverride = [double]$o.stats } else { $script:statsScaleOverride = $null }
+      if ($o -and $o.butler -and [double]$o.butler -le 0.65) { $script:butlerScaleOverride = [double]$o.butler } else { $script:butlerScaleOverride = $null }
+      if ($o -and $o.stats -and [double]$o.stats -le 0.65) { $script:statsScaleOverride = [double]$o.stats } else { $script:statsScaleOverride = $null }
     }
   } catch { $script:butlerScaleOverride = $null; $script:statsScaleOverride = $null }
 }
@@ -1245,8 +1245,9 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $s = [Math]::Pow($w / 3840.0, 0.55)          # v0.6.34 默认=B 幂曲线
-    if ($null -ne $script:butlerScaleOverride) { $s = $script:butlerScaleOverride }
+    $exp = 0.55                                  # v0.6.35 默认指数
+    if ($null -ne $script:butlerScaleOverride) { $exp = $script:butlerScaleOverride }
+    $s = [Math]::Pow($w / 3840.0, $exp)
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
@@ -1263,7 +1264,10 @@ function Push-ScaleAck {
       if ([ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { $wv = $mi.Monitor.Right - $mi.Monitor.Left }
     }
     if ($wv -le 0) { $wv = 3840 }
-    $curve = [Math]::Round([Math]::Pow($wv / 3840.0, 0.55), 3)
+    $be = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride } else { 0.55 }
+    $se = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride } else { 0.55 }
+    $curveB = [Math]::Round([Math]::Pow($wv / 3840.0, $be), 3)
+    $curveS = [Math]::Round([Math]::Pow($wv / 3840.0, $se), 3)
     $ic = [System.Globalization.CultureInfo]::InvariantCulture
     $bj = if ($null -ne $script:butlerScaleOverride) { $script:butlerScaleOverride.ToString('0.###', $ic) } else { 'null' }
     $sj = if ($null -ne $script:statsScaleOverride) { $script:statsScaleOverride.ToString('0.###', $ic) } else { 'null' }

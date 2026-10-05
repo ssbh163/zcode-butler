@@ -1198,36 +1198,38 @@
     popHeadLogo.innerHTML = BM_LOGO_INNER;
   }
 
-  /* ── v0.6.34 显示大小双滑块(设置弹框内容):用量面板/性能胶囊各自自由调整,
-     边界 0.55-1.30,默认=幂曲线 B(等比^0.55,屏相关);override 跨屏保持+重启保持
-     (宿主持久化 %LOCALAPPDATA%\zcode-butler\runtime\widget-scale.json);
-     性能胶囊经文件通道由本窗宿主代写、stats 侧轮询应用 ── */
-  window.butlerScaleOv = null;   /* null=默认曲线 */
+  /* ── v0.6.35 显示大小双滑块(用户拍板):调幂曲线指数,5 离散档 0.45/0.50/0.55(默认)/
+     0.60/0.65——4K 恒 ×1(1^x=1,"4K 正好"保住),2K 在 ×0.77-0.83 区间调;override 跨屏+
+     重启保持(%LOCALAPPDATA%\zcode-butler\runtime\widget-scale.json,存指数);性能胶囊经
+     文件通道由本窗宿主代写、stats 侧轮询应用 ── */
+  window.butlerScaleOv = null;   /* null=默认指数 0.55 */
   window.statsScaleOv = null;
-  window.butlerScaleCur = 1;     /* 当前屏默认曲线值(回执刷新) */
+  window.butlerScaleCur = 1;     /* 当前屏默认指数下的换算值(回执刷新,展示用) */
   window.statsScaleCur = 1;
   function scaleValTxt(ov, cur) {
-    return '×' + (ov != null ? ov : cur).toFixed(2) + (ov != null ? '' : ' ·默认');
+    var e = ov != null ? ov : 0.55;
+    return '指数 ' + e.toFixed(2) + (ov != null ? '' : ' ·默认') + ' ·本屏 ×' + cur.toFixed(2);
   }
   function renderScaleModeHtml() {
     var body = document.getElementById('popContent');
     if (!body) return;
     function slider(id, name, ov, cur) {
-      var val = ov != null ? ov : cur;
+      var val = ov != null ? ov : 0.55;
       return '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*6)">'
         + '<div style="display:flex;justify-content:space-between;align-items:baseline">'
         + '<span style="font-size:calc(var(--pu,0.5px)*26);font-weight:700;color:#fff">' + name + '</span>'
-        + '<span id="' + id + 'Val" style="font-size:calc(var(--pu,0.5px)*22);color:#c9c9c9">' + scaleValTxt(ov, cur) + '</span>'
+        + '<span id="' + id + 'Val" style="font-size:calc(var(--pu,0.5px)*21);color:#c9c9c9">' + scaleValTxt(ov, cur) + '</span>'
         + '</div>'
-        + '<input type="range" id="' + id + '" min="0.55" max="1.30" step="0.05" value="' + val + '" '
+        + '<input type="range" id="' + id + '" min="0.45" max="0.65" step="0.05" value="' + val + '" list="' + id + 'Ticks" '
         + 'style="width:100%;accent-color:#fff;cursor:pointer;height:calc(var(--pu,0.5px)*32)">'
+        + '<datalist id="' + id + 'Ticks"><option value="0.45"></option><option value="0.50"></option><option value="0.55"></option><option value="0.60"></option><option value="0.65"></option></datalist>'
         + '</div>';
     }
     body.innerHTML = '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*16)">'
-      + '<div style="font-size:calc(var(--pu,0.5px)*20);color:#a8a8a8;line-height:1.5">拖动滑块调整两个悬浮窗大小,即时生效、跨屏保持(默认=平滑放大曲线):</div>'
+      + '<div style="font-size:calc(var(--pu,0.5px)*20);color:#a8a8a8;line-height:1.5">5 档调幂曲线指数(4K 恒 ×1,小屏越大指数越小面板越大),松手生效、跨屏保持:</div>'
       + slider('smButler', '用量面板', window.butlerScaleOv, window.butlerScaleCur)
       + slider('smStats', '性能胶囊', window.statsScaleOv, window.statsScaleCur)
-      + '<button type="button" id="smReset" style="align-self:flex-start;padding:calc(var(--pu,0.5px)*8) calc(var(--pu,0.5px)*18);border-radius:999px;cursor:pointer;font-family:inherit;border:calc(var(--pu,0.5px)*2) solid rgba(255,255,255,0.2);background:transparent;color:#c9c9c9;font-size:calc(var(--pu,0.5px)*20)">恢复默认</button>'
+      + '<button type="button" id="smReset" style="align-self:flex-start;padding:calc(var(--pu,0.5px)*8) calc(var(--pu,0.5px)*18);border-radius:999px;cursor:pointer;font-family:inherit;border:calc(var(--pu,0.5px)*2) solid rgba(255,255,255,0.2);background:transparent;color:#c9c9c9;font-size:calc(var(--pu,0.5px)*20)">恢复默认(0.55)</button>'
       + '</div>';
     wireScaleSliders();
   }
@@ -1239,11 +1241,13 @@
       var el = document.getElementById(p[0]);
       if (!el) return;
       el.addEventListener('input', function () {
-        /* v0.6.34 修:拖动只更新标签,松手(change)才应用——本窗滑块实时调本窗大小会令
-           弹框(含滑块)自身缩放,鼠标与滑块相对位置持续漂移=拖拽跳变握不住(用户实测);
-           松手应用,窗口/弹框一次性切到新大小 */
+        /* 拖动只更新标签(指数+本屏换算近似),松手(change)才应用(松手生效语义 v0.6.34 修) */
         var lab = document.getElementById(p[0] + 'Val');
-        if (lab) lab.textContent = '×' + parseFloat(el.value).toFixed(2);
+        if (lab) {
+          var e0 = parseFloat(el.value);
+          var physW = (window.screen && window.screen.width ? window.screen.width : 3840) * (window.devicePixelRatio || 1);
+          lab.textContent = '指数 ' + e0.toFixed(2) + ' ·本屏 ×' + Math.pow(physW / 3840, e0).toFixed(2);
+        }
       });
       el.addEventListener('change', function () { send(p[1], parseFloat(el.value), false); });
     });
