@@ -2240,63 +2240,78 @@
       if (wrapTf && wrapTf !== 'none') {
         try { wrapDx = new DOMMatrixReadOnly(wrapTf).e * kx; } catch (err) { }
       }
-      /* 胶囊轮廓:沿实际渲染的平滑路径每 4 舞台px 重采样(非 250 点折线)——
-         rgn 紧贴曲线,高对比背景下边缘台阶最小化 */
-      var PL = panel.getTotalLength(), caps = [], d, pp;
-      for (d = 0; d <= PL; d += 4) {
-        pp = panel.getPointAtLength(d);
-        caps.push([sr.left + pp.x * kx + wrapDx, sr.top + pp.y * ky]);
-      }
-      /* 两桥铁律(v0.4.9 起拖动桥移除):桥内零设计坐标常量——fab 视口映射(.fab rect+viewBox)、
-         描边宽(computed style)、命中圆(.fab-zone rect)全部运行时实测,
-         挪动/缩放 fab 或改描宽后掩码自动跟随,合入无需回填锚点 */
-      var band = null, arcCaps = null, bandR = 0, fabC = null, fabR = 0;
-      var arc = document.getElementById('arcPath');
-      if (arc && arc.getTotalLength) {
-        var L = arc.getTotalLength();
-        if (L > 0) {
-          var fabBox = document.querySelector('.fab'),
-              fbR = fabBox ? fabBox.getBoundingClientRect() : null,
-              fvb = (arc.ownerSVGElement && arc.ownerSVGElement.viewBox) ? arc.ownerSVGElement.viewBox.baseVal : null,
-              fu = (fbR && fvb && fvb.width) ? fbR.width / fvb.width : 1;
-          var mapF = function (v) {
-            return fbR ? [fbR.left + v[0] * fu, fbR.top + v[1] * fu] : [v[0], v[1]];
-          };
-          var sw = parseFloat(getComputedStyle(arc).strokeWidth) || 0;
-          var half = sw / 2 + 2.5, outer = [], inner = [], i, t, p, q, dx, dy, ln, nx, ny;
-          for (i = 0; i <= 64; i++) {
-            t = L * i / 64;
-            p = arc.getPointAtLength(t);
-            q = arc.getPointAtLength(Math.min(L, t + 0.5));
-            dx = q.x - p.x; dy = q.y - p.y; ln = Math.hypot(dx, dy) || 1;
-            nx = -dy / ln; ny = dx / ln;
-            outer.push([p.x + nx * half, p.y + ny * half]);
-            inner.push([p.x - nx * half, p.y - ny * half]);
-          }
-          var p0 = arc.getPointAtLength(0), p1 = arc.getPointAtLength(L);
-          band = outer.concat(inner.reverse()).map(mapF);
-          arcCaps = [mapF([p0.x, p0.y]), mapF([p1.x, p1.y])];
-          bandR = half * fu;
-          var fabZone = document.querySelector('.fab-zone');
-          if (fabZone) {
-            var fz = fabZone.getBoundingClientRect();
-            fabC = [(fz.left + fz.right) / 2, (fz.top + fz.bottom) / 2];
-            fabR = Math.min(fz.width, fz.height) / 2;
+      /* v0.6.39 静态几何缓存:810 点胶囊采样+130 点弧线钮实测单次 78-640ms(4K 最大化态
+         被放大)=弹框滑动卡顿根因(fitPopHeight 仅 1-5ms 证明排版冲刷不贵,贵在
+         getPointAtLength×940);弹框滑动/toast 只改 pop/toast 矩形,几何恒定 → 缓存,
+         维度(kx/ky)或 wrapDx 变化才重建(resize/展开收起/跨屏自动覆盖) */
+      if (!__shapeGeom || __shapeGeom.kx !== kx || __shapeGeom.ky !== ky || __shapeGeom.wrapDx !== wrapDx) {
+        /* 胶囊轮廓:沿实际渲染的平滑路径每 4 舞台px 重采样(非 250 点折线)——
+           rgn 紧贴曲线,高对比背景下边缘台阶最小化 */
+        var caps = [], d, pp;
+        var PL = panel.getTotalLength();
+        for (d = 0; d <= PL; d += 4) {
+          pp = panel.getPointAtLength(d);
+          caps.push([sr.left + pp.x * kx + wrapDx, sr.top + pp.y * ky]);
+        }
+        /* 两桥铁律(v0.4.9 起拖动桥移除):桥内零设计坐标常量——fab 视口映射(.fab rect+viewBox)、
+           描边宽(computed style)、命中圆(.fab-zone rect)全部运行时实测,
+           挪动或缩放 fab 或改描宽后掩码自动跟随,合入无需回填锚点 */
+        var band = null, arcCaps = null, bandR = 0, fabC = null, fabR = 0;
+        var arc = document.getElementById('arcPath');
+        if (arc && arc.getTotalLength) {
+          var L = arc.getTotalLength();
+          if (L > 0) {
+            var fabBox = document.querySelector('.fab'),
+                fbR = fabBox ? fabBox.getBoundingClientRect() : null,
+                fvb = (arc.ownerSVGElement && arc.ownerSVGElement.viewBox) ? arc.ownerSVGElement.viewBox.baseVal : null,
+                fu = (fbR && fvb && fvb.width) ? fbR.width / fvb.width : 1;
+            var mapF = function (v) {
+              return fbR ? [fbR.left + v[0] * fu, fbR.top + v[1] * fu] : [v[0], v[1]];
+            };
+            var sw = parseFloat(getComputedStyle(arc).strokeWidth) || 0;
+            var half = sw / 2 + 2.5, outer = [], inner = [], i, t, p, q, dx, dy, ln, nx, ny;
+            for (i = 0; i <= 64; i++) {
+              t = L * i / 64;
+              p = arc.getPointAtLength(t);
+              q = arc.getPointAtLength(Math.min(L, t + 0.5));
+              dx = q.x - p.x; dy = q.y - p.y; ln = Math.hypot(dx, dy) || 1;
+              nx = -dy / ln; ny = dx / ln;
+              outer.push([p.x + nx * half, p.y + ny * half]);
+              inner.push([p.x - nx * half, p.y - ny * half]);
+            }
+            var p0 = arc.getPointAtLength(0), p1 = arc.getPointAtLength(L);
+            band = outer.concat(inner.reverse()).map(mapF);
+            arcCaps = [mapF([p0.x, p0.y]), mapF([p1.x, p1.y])];
+            bandR = half * fu;
+            var fabZone = document.querySelector('.fab-zone');
+            if (fabZone) {
+              var fz = fabZone.getBoundingClientRect();
+              fabC = [(fz.left + fz.right) / 2, (fz.top + fz.bottom) / 2];
+              fabR = Math.min(fz.width, fz.height) / 2;
+            }
           }
         }
+        __shapeGeom = { kx: kx, ky: ky, wrapDx: wrapDx, srLeft: sr.left, srTop: sr.top, caps: caps, band: band, arcCaps: arcCaps, bandR: bandR, fabC: fabC, fabR: fabR, arcEl: arc, dbgBodyBg: getComputedStyle(document.body).backgroundColor, dbgDiscFill: (function () { try { return getComputedStyle(document.querySelector('.fab .disc circle')).fill; } catch (e) { return 'n/a'; } })(), dbgHit: (function () { try { return getComputedStyle(document.querySelector('.fab-hit')).backgroundColor; } catch (e) { return 'n/a'; } })() };
       }
+      var g = __shapeGeom;
+      /* 窗口整体平移(锚定跟随)不改 kx/ky/wrapDx 但改 srLeft/srTop——防御性用当前 sr
+         校正(同屏锚定不动,跨屏必经 resize 重建,此路径近零) */
+      var ox = sr.left - g.srLeft, oy = sr.top - g.srTop;
+      var shifted = (ox !== 0 || oy !== 0);
+      var outCaps = shifted ? g.caps.map(function (pt) { return [pt[0] + ox, pt[1] + oy]; }) : g.caps;
+      var outBand = (shifted && g.band) ? g.band.map(function (pt) { return [pt[0] + ox, pt[1] + oy]; }) : g.band;
       /* 通知卡(提案 D)显示时把整卡矩形并入形状上报:宿主 SetWindowRgn 取景框外扩
          (v0.6.24 Rgn 线:矩形同时管可见与命中,须报整卡否则卡本体被裁不可见),
-         卡上「知道了/稍后」可点;隐藏时上报 null,取景框缩回、区域回穿透 */
+         卡上「知道了/稍后」可点;隐藏时上报 null,取景框缩回、区域回穿透(实时读) */
       var toastEl = document.getElementById('toastCard');
       var toastRect = null;
       if (toastEl && toastEl.classList.contains('on')) {
         var tr = toastEl.getBoundingClientRect();
         toastRect = [tr.left, tr.top, tr.right, tr.bottom];
       }
-      /* 环详情弹窗显形时同样报整卡矩形(v0.6.24:Rgn 可见性需要;v0.6.23 的"只报刷新
-         按钮包络"随 Rgn 上线撤销——掩码粒度收窄治不了窗口矩形虚挡,Rgn 治本):
-         弹窗显形 = 取景框外扩(可见+可命中),隐形 = null 缩回回穿透 */
+      /* 环详情弹窗显形时同样报整卡矩形(v0.6.24;v0.6.28 环间滑动直报——四弹窗高度不同,
+         滑向高弹窗时新顶出旧取景框被裁的根因):弹窗显形 = 取景框外扩(可见+可命中),
+         隐形 = null 缩回回穿透(实时读,缓存只保静态几何) */
       var popEl = document.getElementById('usagePop');
       var popRect = null;
       if (popEl && popEl.classList.contains('on')) {
@@ -2304,20 +2319,21 @@
         popRect = [pr.left, pr.top, pr.right, pr.bottom];
       }
       try {
-        var pb = panel.getBoundingClientRect(), ab = arc ? arc.getBoundingClientRect() : null;
+        var pb = panel.getBoundingClientRect(), ab = g.arcEl ? g.arcEl.getBoundingClientRect() : null;
         window.chrome.webview.postMessage(JSON.stringify({
           type: 'shape', dpr: (window.devicePixelRatio || 1),
-          capsule: caps, band: band, caps: arcCaps, bandR: bandR, fabC: fabC, fabR: fabR,
+          capsule: outCaps, band: outBand, caps: g.arcCaps, bandR: g.bandR, fabC: g.fabC, fabR: g.fabR,
           toast: toastRect,
           pop: popRect,
           dbgPanelBox: [pb.left, pb.top, pb.right, pb.bottom],
           dbgArcBox: ab ? [ab.left, ab.top, ab.right, ab.bottom] : null,
-          dbgBodyBg: getComputedStyle(document.body).backgroundColor,
-          dbgDiscFill: (function () { try { return getComputedStyle(document.querySelector('.fab .disc circle')).fill; } catch (e) { return 'n/a'; } })(),
-          dbgHit: (function () { try { return getComputedStyle(document.querySelector('.fab-hit')).backgroundColor; } catch (e) { return 'n/a'; } })()
+          dbgBodyBg: g.dbgBodyBg,
+          dbgDiscFill: g.dbgDiscFill,
+          dbgHit: g.dbgHit
         }));
       } catch (err) { }
     }
+    var __shapeGeom = null;
     if (document.readyState === 'complete') { requestAnimationFrame(butlerReportShape); }
     else { window.addEventListener('load', function () { requestAnimationFrame(butlerReportShape); }); }
     /* 展开/收起动画落定后重报形状:掩码 X 跟随面板进出(收起后穿透、展开后可拖),
