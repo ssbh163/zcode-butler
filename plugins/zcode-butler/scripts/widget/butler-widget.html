@@ -1198,62 +1198,36 @@
     popHeadLogo.innerHTML = BM_LOGO_INNER;
   }
 
-  /* ── v0.6.37 显示大小双滑块(用户拍板新公式):s=(屏宽/3840)×N,N 五档 0.85/1.00(默认)/
-     1.15/1.30/1.45——等比基础上的人为增益,4K 默认 N=1 即"正好",小屏拉高 N 放大;
-     松手生效;override 跨屏+重启保持(%LOCALAPPDATA%\zcode-butler\runtime\widget-scale.json,
-     存 N);性能胶囊经文件通道由本窗宿主代写、stats 侧轮询应用 ── */
-  window.butlerScaleOv = null;   /* null=默认 N=1 */
-  window.statsScaleOv = null;
-  window.butlerScaleCur = 1;     /* 当前屏默认 N 下的换算值(回执刷新,展示用) */
-  window.statsScaleCur = 1;
-  function scaleValTxt(ov, cur) {
-    var n = ov != null ? ov : 1;
-    return '倍率 ×' + n.toFixed(2) + (ov != null ? '' : ' ·默认') + ' ·本屏 ×' + cur.toFixed(2);
-  }
+  /* ── v0.6.33 显示大小档位(设置弹框内容):B 方案试大小切换器,三档即时生效 ── */
+  window.butlerScaleMode = 'b';   /* 页面侧缓存(宿主回执刷新) */
+  var SCALE_MODES = [
+    { id: 'legacy', name: '等比缩小', desc: '屏宽/3840(4K=1,2K≈0.67)' },
+    { id: 'b',      name: '平滑放大', desc: '等比^0.55(4K=1,2K≈0.80)·推荐' },
+    { id: 'full',   name: '4K 原始大小', desc: '任何屏恒 1.0' }
+  ];
   function renderScaleModeHtml() {
     var body = document.getElementById('popContent');
     if (!body) return;
-    function slider(id, name, ov, cur) {
-      var val = ov != null ? ov : 1;
-      return '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*6)">'
-        + '<div style="display:flex;justify-content:space-between;align-items:baseline">'
-        + '<span style="font-size:calc(var(--pu,0.5px)*26);font-weight:700;color:#fff">' + name + '</span>'
-        + '<span id="' + id + 'Val" style="font-size:calc(var(--pu,0.5px)*21);color:#c9c9c9">' + scaleValTxt(ov, cur) + '</span>'
-        + '</div>'
-        + '<input type="range" id="' + id + '" min="0.85" max="1.45" step="0.15" value="' + val + '" list="' + id + 'Ticks" '
-        + 'style="width:100%;accent-color:#fff;cursor:pointer;height:calc(var(--pu,0.5px)*32)">'
-        + '<datalist id="' + id + 'Ticks"><option value="0.85"></option><option value="1"></option><option value="1.15"></option><option value="1.3"></option><option value="1.45"></option></datalist>'
-        + '</div>';
+    var cur = window.butlerScaleMode, btn = '';
+    for (var i = 0; i < SCALE_MODES.length; i++) {
+      var m = SCALE_MODES[i], on = (m.id === cur);
+      btn += '<button type="button" data-scalemode="' + m.id + '" style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*6);align-items:flex-start;'
+        + 'padding:calc(var(--pu,0.5px)*14) calc(var(--pu,0.5px)*20);border-radius:999px;cursor:pointer;font-family:inherit;'
+        + 'border:calc(var(--pu,0.5px)*2.6) solid ' + (on ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.14)') + ';'
+        + 'background:' + (on ? 'rgba(255,255,255,0.10)' : 'transparent') + ';'
+        + 'color:' + (on ? '#fff' : '#c9c9c9') + '">'
+        + '<span style="font-size:calc(var(--pu,0.5px)*28);font-weight:700">' + m.name + (on ? ' ·当前' : '') + '</span>'
+        + '<span style="font-size:calc(var(--pu,0.5px)*22);opacity:0.72">' + m.desc + '</span></button>';
     }
-    body.innerHTML = '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*16)">'
-      + '<div style="font-size:calc(var(--pu,0.5px)*20);color:#a8a8a8;line-height:1.5">5 档倍率 N(在等比 屏宽/3840 基础上放大,4K 默认 ×1 正好),松手生效、重启保持:</div>'
-      + slider('smButler', '用量面板', window.butlerScaleOv, window.butlerScaleCur)
-      + slider('smStats', '性能胶囊', window.statsScaleOv, window.statsScaleCur)
-      + '<button type="button" id="smReset" style="align-self:flex-start;padding:calc(var(--pu,0.5px)*8) calc(var(--pu,0.5px)*18);border-radius:999px;cursor:pointer;font-family:inherit;border:calc(var(--pu,0.5px)*2) solid rgba(255,255,255,0.2);background:transparent;color:#c9c9c9;font-size:calc(var(--pu,0.5px)*20)">恢复默认(×1)</button>'
-      + '</div>';
-    wireScaleSliders();
+    body.innerHTML = '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*14)">'
+      + '<div style="font-size:calc(var(--pu,0.5px)*20);color:#a8a8a8;line-height:1.5">非 4K 屏上面板与弹框的大小档位,点击即时生效,跨屏保持:</div>'
+      + btn + '</div>';
   }
-  function wireScaleSliders() {
-    function send(win, v, isDefault) {
-      try { window.chrome.webview.postMessage('{"type":"scale","win":"' + win + '","v":' + (isDefault ? '"default"' : v) + '}'); } catch (err) { }
-    }
-    [['smButler', 'butler'], ['smStats', 'stats']].forEach(function (p) {
-      var el = document.getElementById(p[0]);
-      if (!el) return;
-      el.addEventListener('input', function () {
-        /* 拖动只更新标签(倍率+本屏换算近似),松手(change)才应用(松手生效语义 v0.6.34 修) */
-        var lab = document.getElementById(p[0] + 'Val');
-        if (lab) {
-          var n0 = parseFloat(el.value);
-          var physW = (window.screen && window.screen.width ? window.screen.width : 3840) * (window.devicePixelRatio || 1);
-          lab.textContent = '倍率 ×' + n0.toFixed(2) + ' ·本屏 ×' + (physW / 3840 * n0).toFixed(2);
-        }
-      });
-      el.addEventListener('change', function () { send(p[1], parseFloat(el.value), false); });
-    });
-    var rs = document.getElementById('smReset');
-    if (rs) rs.addEventListener('click', function () { send('butler', 0, true); send('stats', 0, true); });
-  }
+  document.addEventListener('click', function (e) {
+    var t = e.target && e.target.closest ? e.target.closest('[data-scalemode]') : null;
+    if (!t) return;
+    try { window.chrome.webview.postMessage('{"type":"scalemode","mode":"' + t.getAttribute('data-scalemode') + '"}'); } catch (err) { }
+  });
 
   function renderPop(kind) {
     var body = document.getElementById('popContent');
@@ -2299,18 +2273,12 @@
         } else if (msg && msg.type === 'ztheme') {
           /* v0.6.15 星空主题门控:宿主边沿推送的 ZCode 实况主题(深色才启粒子) */
           butlerZTheme(msg.v);
-        } else if (msg && msg.type === 'scaleack') {
-          /* v0.6.34:双滑块回执——刷新缓存与设置弹框;拖动中(activeElement 为滑块)
-             跳过重渲染,防重建 DOM 打断拖拽 */
-          window.butlerScaleOv = (msg.butler == null) ? null : msg.butler;
-          window.statsScaleOv = (msg.stats == null) ? null : msg.stats;
-          window.butlerScaleCur = msg.butlerCur;
-          window.statsScaleCur = msg.statsCur;
+        } else if (msg && msg.type === 'scalemode') {
+          /* v0.6.33:档位切换回执——刷新缓存与设置弹框高亮 */
+          window.butlerScaleMode = msg.mode || 'b';
           try {
             var _pop = document.getElementById('usagePop');
-            var _ae = document.activeElement;
-            var _dragging = _ae && (_ae.id === 'smButler' || _ae.id === 'smStats');
-            if (popKind === 'gear' && _pop && _pop.classList.contains('on') && !_dragging) renderScaleModeHtml();
+            if (popKind === 'gear' && _pop && _pop.classList.contains('on')) renderScaleModeHtml();
           } catch (err) { }
         }
       } catch (err) { }
