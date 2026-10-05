@@ -1094,7 +1094,7 @@
      高峰进度条按北京时间显式折算(与 usage.mjs 同口径,不吃本机时区) */
   var butlerData = null;
   var popKind = null;
-  var POP_TITLES = { '5h': '5 小时额度池', '7d': '每周额度', mcp: 'MCP 工具调用', key: 'Key 月度用量', gear: '显示大小' };
+  var POP_TITLES = { '5h': '5 小时额度池', '7d': '每周额度', mcp: 'MCP 工具调用', key: 'Key 月度用量' };
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
@@ -1198,55 +1198,12 @@
     popHeadLogo.innerHTML = BM_LOGO_INNER;
   }
 
-  /* ── v0.6.33 显示大小档位(设置弹框内容):B 方案试大小切换器,三档即时生效 ── */
-  window.butlerScaleMode = 'b';   /* 页面侧缓存(宿主回执刷新) */
-  var SCALE_MODES = [
-    { id: 'legacy', name: '等比缩小', desc: '屏宽/3840(4K=1,2K≈0.67)' },
-    { id: 'b',      name: '平滑放大', desc: '等比^0.55(4K=1,2K≈0.80)·推荐' },
-    { id: 'full',   name: '4K 原始大小', desc: '任何屏恒 1.0' }
-  ];
-  function renderScaleModeHtml() {
-    var body = document.getElementById('popContent');
-    if (!body) return;
-    var cur = window.butlerScaleMode, btn = '';
-    for (var i = 0; i < SCALE_MODES.length; i++) {
-      var m = SCALE_MODES[i], on = (m.id === cur);
-      btn += '<button type="button" data-scalemode="' + m.id + '" style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*6);align-items:flex-start;'
-        + 'padding:calc(var(--pu,0.5px)*14) calc(var(--pu,0.5px)*20);border-radius:999px;cursor:pointer;font-family:inherit;'
-        + 'border:calc(var(--pu,0.5px)*2.6) solid ' + (on ? 'rgba(255,255,255,0.85)' : 'rgba(255,255,255,0.14)') + ';'
-        + 'background:' + (on ? 'rgba(255,255,255,0.10)' : 'transparent') + ';'
-        + 'color:' + (on ? '#fff' : '#c9c9c9') + '">'
-        + '<span style="font-size:calc(var(--pu,0.5px)*28);font-weight:700">' + m.name + (on ? ' ·当前' : '') + '</span>'
-        + '<span style="font-size:calc(var(--pu,0.5px)*22);opacity:0.72">' + m.desc + '</span></button>';
-    }
-    body.innerHTML = '<div style="display:flex;flex-direction:column;gap:calc(var(--pu,0.5px)*14)">'
-      + '<div style="font-size:calc(var(--pu,0.5px)*20);color:#a8a8a8;line-height:1.5">非 4K 屏上面板与弹框的大小档位,点击即时生效,跨屏保持:</div>'
-      + btn + '</div>';
-  }
-  document.addEventListener('click', function (e) {
-    var t = e.target && e.target.closest ? e.target.closest('[data-scalemode]') : null;
-    if (!t) return;
-    try { window.chrome.webview.postMessage('{"type":"scalemode","mode":"' + t.getAttribute('data-scalemode') + '"}'); } catch (err) { }
-  });
-
   function renderPop(kind) {
     var body = document.getElementById('popContent');
     var titleEl = document.getElementById('popTitle');
     var badgeEl = document.getElementById('popQBadge');
     var rbtn = document.getElementById('popRefresh');
     if (!body || !titleEl) return;    popKind = kind;
-    if (kind === 'gear') {
-      /* v0.6.33:设置按钮弹框(悬停齿轮,同 4 环先例)——暂时用作 B 方案大小档位
-         切换器:三档即时生效(宿主 Switch-ScaleMode 同屏可见切换,不静默) */
-      titleEl.style.fontSize = '';
-      titleEl.textContent = POP_TITLES[kind];
-      if (badgeEl) { badgeEl.hidden = true; badgeEl.innerHTML = ''; }
-      if (rbtn) { rbtn.hidden = true; }   /* 设置弹框无刷新语义 */
-      renderScaleModeHtml();
-      fitPopHeight();
-      return;
-    }
-    if (rbtn) { rbtn.hidden = false; }   /* 其余弹框恢复刷新按钮 */
     if (kind === '5h') {
       renderBigModelLogo();
       titleEl.textContent = 'GLM Coding Pro';
@@ -1633,13 +1590,11 @@
       pop.style.left = x.toFixed(1) + 'px';
       pop.style.top = y.toFixed(1) + 'px';
     }
-    function show(meter, kindForced) {
+    function show(meter) {
       clearTimeout(hideT);
       active = meter;
-      /* v0.6.0 四分发:按 meter 的 data-od-id 渲染对应弹框内容;
-         v0.6.33 kindForced——齿轮按钮(data-od-id="settings-button")复用本链时
-         显式指定 'gear',否则 kind 提取不匹配、弹的是上一环的残留内容(实测 bug) */
-      var kind = kindForced || String(meter.getAttribute('data-od-id') || '').replace(/^meter-/, '');
+      /* v0.6.0 四分发:按 meter 的 data-od-id 渲染对应弹框内容 */
+      var kind = String(meter.getAttribute('data-od-id') || '').replace(/^meter-/, '');
       if (POP_TITLES[kind]) renderPop(kind);
       if (pop.classList.contains('on')) { place(meter); butlerReportShape(); return; }  /* 环间滑动不重播;v0.6.28 改直报——四弹窗高度不同(5h 最高),滑动换高度/换 top 后若等 520ms 防抖,新顶部落在旧取景框外被裁(用户实测"5h 顶部缺一条"的根因),直报随裁 */
       clearTimeout(showT);
@@ -1670,18 +1625,6 @@
       m.addEventListener('mouseenter', function () { show(m); });
       m.addEventListener('mouseleave', hide);
     });
-    /* v0.6.33:齿轮按钮(展开态)悬停 → 设置弹框(显示大小档位,同 4 环先例);
-       收起态(眼镜)不弹——其点击语义是消息/展开,悬停弹框会挡通知卡 */
-    (function () {
-      var st = document.querySelector('.stage');
-      var gb = document.getElementById('gearBtn');
-      if (!gb) return;
-      gb.addEventListener('mouseenter', function () {
-        if (!st || st.classList.contains('minimized')) return;
-        show(gb, 'gear');   /* v0.6.33 修:显式 kind,勿走 data-od-id 提取 */
-      });
-      gb.addEventListener('mouseleave', hide);
-    })();
     /* v0.6.2:指针移进弹窗本体 = 保活(刷新按钮可达);离开弹窗且 70ms 内未回环 → 收起。
        v0.6.24 Rgn 线:取景框=整卡命中,环→弹窗全程鼠标事件不断,保活链完整 */
     pop.addEventListener('mouseenter', function () { clearTimeout(hideT); });
@@ -2273,13 +2216,6 @@
         } else if (msg && msg.type === 'ztheme') {
           /* v0.6.15 星空主题门控:宿主边沿推送的 ZCode 实况主题(深色才启粒子) */
           butlerZTheme(msg.v);
-        } else if (msg && msg.type === 'scalemode') {
-          /* v0.6.33:档位切换回执——刷新缓存与设置弹框高亮 */
-          window.butlerScaleMode = msg.mode || 'b';
-          try {
-            var _pop = document.getElementById('usagePop');
-            if (popKind === 'gear' && _pop && _pop.classList.contains('on')) renderScaleModeHtml();
-          } catch (err) { }
         }
       } catch (err) { }
     });

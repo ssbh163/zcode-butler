@@ -183,6 +183,7 @@ Add-Type -Namespace ButlerNative -Name Win -MemberDefinition @'
 [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
 // v0.6.17 屏幕等比缩放:ZCode 所在屏物理宽 → 内容 scale(用户 4K@1.75 为基准)
 [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr h, uint flags);
+[DllImport("shcore.dll")] public static extern int GetDpiForMonitor(IntPtr hmon, int type, out uint dpiX, out uint dpiY);   // v0.6.38:屏 DPI(静态,不随窗口跨屏过渡)
 [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern bool GetMonitorInfoW(IntPtr h, ref MONITORINFOEX mi);
 [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Unicode)]
 public struct MONITORINFOEX { public int cbSize; public RECT Monitor; public RECT WorkArea; public uint Flags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst=32)] public string DeviceName; }
@@ -704,6 +705,7 @@ public static class ButlerHost {
       // 220ms,纯计时会被骗过——18:37:07 实测 settle 放行后 shape#2/#3 才到);
       // dpr 迟迟不同步超 2s 则兜底放行(防理论死等)
       if (Math.Abs(_shapeDpr - _wantDpr) > 0.01) {
+        KillTimer(_hwnd, 0x4242);   // v0.6.38:非终态 shape=过渡仍在进行,撤销已武装的静默计时(脏 wantDpr 提前武装后旧计时无人重置照常触发=显示后再跳)
         if (_dprWaitSince == 0) _dprWaitSince = Environment.TickCount;
         if (Environment.TickCount - _dprWaitSince < 2000) return;
         Log("scale-settle: dpr wait timeout, force");
@@ -933,13 +935,6 @@ function Push-Data {
         WLog 'refresh: invoke'
         Invoke-Refresh
       }
-    }
-    elseif ($msg -like '{"type":"scalemode"*') {
-      # v0.6.33 显示大小档位(设置弹框入口)→ 同屏可见切换并回执(页面刷新高亮)
-      try {
-        $mo = ($msg | ConvertFrom-Json).mode
-        Switch-ScaleMode ([string]$mo)
-      } catch { WLog ('scalemode msg THREW: ' + $_.Exception.Message) }
     }
     elseif ($msg -like '*ready*') { $script:pageReady = $true; Push-Data; Push-ZTheme }
     # v0.4.9:drag 消息路由已删——面板固定 1/3 锚定,页面侧拖动桥同除,此消息不再出现
@@ -1190,10 +1185,8 @@ function Push-ZTheme {
 # v0.6.17 屏幕等比(实现):窗口物理 = 基准 × scale,SetWindowPos 调尺寸不动位置;
 # WM_SIZE 自动同步 WebView2 Bounds,页面 --u 舞台自适应与 shape 掩码全实测自动跟随
 $script:lastScaleMon = [IntPtr]::Zero
-# ---- v0.6.33 显示大小档位(用户拍板 B 方案试用,设置弹框入口) ----
-# legacy = 纯等比(屏宽/3840,v0.6.17 原样);b = 平滑放大(等比^0.55,4K 恒 1、2K≈0.80);
-# full = 恒 4K 原始大小。默认 b;跨屏档位保持(内存态,重启回默认——拍板后写死默认值)
-$script:scaleMode = 'b'
+# ---- v0.6.38 显示大小定死 B 幂曲线(用户拍板,齿轮档位弹框整撤) ----
+# s = (屏宽/3840)^0.55:4K=1 恒等,2K≈0.80 平滑放大;无档位无持久化,跨屏自动随屏
 function Get-ScreenScaleOf([IntPtr]$hwnd) {
   try {
     if ($hwnd -eq [IntPtr]::Zero) { return 1.0 }
@@ -1204,37 +1197,10 @@ function Get-ScreenScaleOf([IntPtr]$hwnd) {
     if (-not [ButlerNative.Win]::GetMonitorInfoW($mon, [ref]$mi)) { return 1.0 }
     $w = $mi.Monitor.Right - $mi.Monitor.Left
     if ($w -le 0) { return 1.0 }
-    $s = $w / 3840.0
-    if ($script:scaleMode -eq 'b') { $s = [Math]::Pow($s, 0.55) }
-    elseif ($script:scaleMode -eq 'full') { $s = 1.0 }
+    $s = [Math]::Pow($w / 3840.0, 0.55)   # v0.6.38 定死 B 幂曲线(原 v0.6.33 档位默认档)
     if ($s -lt 0.3 -or $s -gt 3.0) { return 1.0 }   # 防御:离谱值回 1
     return [Math]::Round($s, 3)
   } catch { return 1.0 }
-}
-# 档位切换:同屏**可见**切换(不走 Update-UiScale 的 Hide 防御——那是跨屏静默的配套,
-# 同屏无 _scaleHidden 置位会隐藏后无人解除;此处让用户即时看到大小变化)
-function Switch-ScaleMode([string]$mode) {
-  try {
-    if ($mode -ne 'legacy' -and $mode -ne 'b' -and $mode -ne 'full') { $mode = 'b' }
-    $script:scaleMode = $mode
-    if (([int64]$script:zcodeHwnd) -ne 0) {
-      $s = Get-ScreenScaleOf $script:zcodeHwnd
-      $script:uiScale = $s
-      $script:winH = [int][Math]::Round($script:baseWinH * $s)
-      $script:winW = [int][Math]::Ceiling($script:baseWinW * $s)
-      try {
-        [ButlerHost]::ClearViewRgn()   # 先撒后设(同 Update-UiScale 顺序纪律)
-        [ButlerNative.Win]::SetWindowPos((Get-WidgetHwnd), [IntPtr]::Zero, 0, 0, $script:winW, $script:winH, 0x0016) | Out-Null
-        [ButlerHost]::SetFollowParams($script:zcodeHwnd, $script:winW)
-        [ButlerHost]::SetFullStage($script:winW, $script:winH)
-        [ButlerHost]::SyncFollowNow()
-        $dpiNew = [ButlerNative.Win]::GetDpiForWindow((Get-WidgetHwnd))
-        if ($dpiNew -gt 0) { [ButlerHost]::SetWantDpr([Math]::Round($dpiNew / 96.0, 3)) }
-        WLog ('scale-mode: ' + $mode + ' s=' + $s + ' win=' + $script:winW + 'x' + $script:winH)
-      } catch { WLog ('scale-mode THREW ' + $_.Exception.Message) }
-    } else { WLog ('scale-mode: ' + $mode + ' (no zcode yet)') }
-    try { [ButlerHost]::PostJson(('{"type":"scalemode","mode":"' + $script:scaleMode + '"}')) } catch { }
-  } catch { }
 }
 function Update-UiScale([bool]$force) {
   try {
@@ -1259,8 +1225,19 @@ function Update-UiScale([bool]$force) {
         [ButlerHost]::SetFollowParams($script:zcodeHwnd, $script:winW)
         [ButlerHost]::SetFullStage($script:winW, $script:winH)   # 只记全舞台尺寸;裁剪等新 shape
         [ButlerHost]::SyncFollowNow()
-        $dpiNew = [ButlerNative.Win]::GetDpiForWindow((Get-WidgetHwnd))
-        if ($dpiNew -gt 0) { [ButlerHost]::SetWantDpr([Math]::Round($dpiNew / 96.0, 3)) }   # v0.6.31:布局静默的 dpr 判据(必须在 SyncFollowNow move 过屏后读才是新屏值;NOMOVE resize 时窗口还在旧屏)
+        # v0.6.38:wantDpr 的 DPI 源改屏 DPI(同 stats v0.13m 教训)——GetDpiForWindow 跨屏
+        # 过渡期会返回旧屏值(实测 4K→2K 滞留 168),脏 wantDpr 恰好匹配旧 dpr 中间布局 shape
+        # → 静默计时提前武装 → settle 显示后取景框再跳(用户实测"多次移动");屏属性静态即查即准
+        $dpiNew = 0
+        try {
+          $monD = [ButlerNative.Win]::MonitorFromWindow($script:zcodeHwnd, 1)
+          if ($monD -ne [IntPtr]::Zero) {
+            $dxD = [uint32]0; $dyD = [uint32]0
+            if ([ButlerNative.Win]::GetDpiForMonitor($monD, 0, [ref]$dxD, [ref]$dyD) -eq 0 -and $dxD -gt 0) { $dpiNew = [int]$dxD }
+          }
+        } catch { }
+        if ($dpiNew -le 0) { $dpiNew = [ButlerNative.Win]::GetDpiForWindow((Get-WidgetHwnd)) }   # 兜底:窗口 DPI(极端时序仍可能读到过渡值)
+        if ($dpiNew -gt 0) { [ButlerHost]::SetWantDpr([Math]::Round($dpiNew / 96.0, 3)) }
         WLog ('ui-scale: ' + $s + ' -> ' + $script:winW + 'x' + $script:winH)
       } catch { WLog ('ui-scale THREW ' + $_.Exception.Message) }
     } elseif ($force -or $monChanged) {
