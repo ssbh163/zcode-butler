@@ -484,7 +484,7 @@ public static class ButlerHost {
     _followProc2 = OnWinEvent2;
     _locHook2 = SetWinEventHookB(0x800B, 0x800B, IntPtr.Zero, _followProc2, pid2, 0, 0);              // LOCATIONCHANGE
     _minHook2 = SetWinEventHookB(0x0016, 0x0017, IntPtr.Zero, _followProc2, pid2, 0, 0);              // MINIMIZESTART/END
-    _visHook2 = SetWinEventHookB(0x8002, 0x8003, IntPtr.Zero, _followProc2, pid2, 0, 0);              // SHOW/HIDE
+    _visHook2 = SetWinEventHookB(0x8001, 0x8003, IntPtr.Zero, _followProc2, pid2, 0, 0);              // DESTROY/SHOW/HIDE(v0.6.44:0x8001 入列——主窗销毁=UI 消失同帧,路由 ZGONE2)
   }
   public static void UnhookFollowNow() {
     if (_locHook2 != IntPtr.Zero) { try { UnhookWinEventB(_locHook2); } catch { } _locHook2 = IntPtr.Zero; }
@@ -502,6 +502,7 @@ public static class ButlerHost {
       // Geometry + visibility are recomputed in WndProc (ApplyFollowGeom) from live
       // rects; the callback stays post-only (WinEvent reentrancy contract).
       if (evt == 0x800B) PostMessageB(_hwnd, WM_APP_FOLLOW2, IntPtr.Zero, IntPtr.Zero);
+      else if (evt == 0x8001 && idObject == 0) PostMessageB(_hwnd, WM_APP_ZGONE2, IntPtr.Zero, IntPtr.Zero);   // v0.6.44:主窗销毁(UI 消失同帧)——Electron 退出时窗口先亡进程后死 ~2-3s,只等进程=可见滞留
       else PostMessageB(_hwnd, WM_APP_VIS2, IntPtr.Zero, IntPtr.Zero);   // MINIMIZE/SHOW/HIDE -> visibility sync
     } catch { }
   }
@@ -511,6 +512,7 @@ public static class ButlerHost {
   // PostMessage(线程契约同 WinEvent);WndProc 即刻 SW_HIDE(视觉与 ZCode 同帧,清场可慢)。
   // OpenProcess 失败则看护失效,退回 rescan 2.5s 兜底(行为=旧版,不劣化)。
   private const uint WM_APP_QUIT2 = 0x8067;
+  private const uint WM_APP_ZGONE2 = 0x8068;
   [DllImport("kernel32.dll", EntryPoint = "OpenProcess", SetLastError = true)] private static extern IntPtr OpenProcessDW(uint access, bool inherit, uint pid);
   [DllImport("kernel32.dll", EntryPoint = "RegisterWaitForSingleObject", SetLastError = true)] private static extern bool RegisterWaitForSingleObjectDW(out IntPtr wait, IntPtr h, WaitOrTimerDelegate cb, IntPtr ctx, uint ms, uint flags);
   [DllImport("kernel32.dll", EntryPoint = "UnregisterWait", SetLastError = true)] private static extern bool UnregisterWaitDW(IntPtr wait);
@@ -520,6 +522,7 @@ public static class ButlerHost {
   private static IntPtr _zProcHandle, _zProcWait;
   private static WaitOrTimerDelegate _quitProc;   // 委托常驻防 GC(同 _followProc2)
   public static Action OnQuit;
+  public static Action OnZGone;
   public static bool SetDeathWatch(uint pid) {
     ClearDeathWatch();
     if (pid == 0 || _hwnd == IntPtr.Zero) return false;
@@ -848,6 +851,11 @@ public static class ButlerHost {
         // v0.6.43:ZCode 进程已终止(内核句柄 signaled)——先隐身(与 ZCode 视觉同帧)再清场
         ShowWindow(_hwnd, 0);
         if (OnQuit != null) { try { OnQuit(); } catch { } }
+        return IntPtr.Zero;
+      case WM_APP_ZGONE2:
+        // v0.6.44:ZCode 主窗已销毁(UI 消失同帧)——先隐身;进程死(内核看护)→退,进程活(窗口重建)→重吸附后自动复显
+        ShowWindow(_hwnd, 0);
+        if (OnZGone != null) { try { OnZGone(); } catch { } }
         return IntPtr.Zero;
       case WM_SIZE:
         if (_controller != null) {
@@ -1293,6 +1301,12 @@ function Update-UiScale([bool]$force) {
 [ButlerHost]::OnMonChange = { try { Update-UiScale $true } catch { } }
 # v0.6.43 生死绑定提速:ZCode 进程终止的内核信号(WndProc 已先 SW_HIDE)→ 清场退出
 [ButlerHost]::OnQuit = { Stop-Widget 'zcode-process-dead' }
+# v0.6.44:ZCode 主窗销毁信号(UI 消失同帧;WndProc 已先 SW_HIDE)——进程活=窗口重建期
+# (rescan ≤2.5s 重吸附后自动复显),进程死=内核看护随即触发,此处兜底直退
+[ButlerHost]::OnZGone = {
+  if (-not (Test-ZcodeAlive)) { Stop-Widget 'zcode-window-gone' }
+  else { WLog 'zgone: window destroyed, proc alive (re-attach pending)' }
+}
 
 $rescanTimer = New-Object System.Windows.Threading.DispatcherTimer
 $rescanTimer.Interval = [TimeSpan]::FromMilliseconds(2500)

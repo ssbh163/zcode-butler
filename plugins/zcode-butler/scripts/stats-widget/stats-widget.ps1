@@ -411,6 +411,7 @@ public static class StatsHost {
   private static int _fwW, _fwH;
   private static FollowProc _followProc;
   private static IntPtr _locHook;
+  private static IntPtr _dstHook;   // v0.13p:ZCode 主窗销毁钩子(0x8001)
 
   // v0.13g 顶边居中(用户拍板 2026-10-01):位置 = ZCode 窗口矩形动态算(水平居中随
   // resize 实时重算,垂直贴窗口顶边),不再需要烘焙偏移——锚点/输入框几何链整体退役
@@ -419,13 +420,16 @@ public static class StatsHost {
   }
   public static void HookFollowNow() {
     if (_locHook != IntPtr.Zero) { try { UnhookWinEvent2(_locHook); } catch { } _locHook = IntPtr.Zero; }
+    if (_dstHook != IntPtr.Zero) { try { UnhookWinEvent2(_dstHook); } catch { } _dstHook = IntPtr.Zero; }
     if (_zHwnd == IntPtr.Zero || _zHwnd == _hwnd) return;
     uint pid; GetWindowThreadProcessId2(_zHwnd, out pid);
     _followProc = OnLocChange;
     _locHook = SetWinEventHook2(0x800B /*EVENT_OBJECT_LOCATIONCHANGE*/, 0x800B, IntPtr.Zero, _followProc, pid, 0, 0);
+    _dstHook = SetWinEventHook2(0x8001 /*EVENT_OBJECT_DESTROY*/, 0x8001, IntPtr.Zero, _followProc, pid, 0, 0);   // v0.13p:主窗销毁(UI 消失同帧)
   }
   public static void UnhookFollowNow() {
     if (_locHook != IntPtr.Zero) { try { UnhookWinEvent2(_locHook); } catch { } _locHook = IntPtr.Zero; }
+    if (_dstHook != IntPtr.Zero) { try { UnhookWinEvent2(_dstHook); } catch { } _dstHook = IntPtr.Zero; }
     _followProc = null;
   }
   // ---- v0.13o 生死绑定提速(同 butler v0.6.43):内核级 ZCode 进程终止信号 → WndProc 即刻隐身再清场 ----
@@ -442,6 +446,7 @@ public static class StatsHost {
   private static IntPtr _zProcHandle, _zProcWait;
   private static WaitOrTimerDelegate _quitProc;   // 委托常驻防 GC(同 _followProc)
   public static Action OnQuit;
+  public static Action OnZGone;
   public static bool SetDeathWatch(uint pid) {
     ClearDeathWatch();
     if (pid == 0 || _hwnd == IntPtr.Zero) return false;
@@ -475,6 +480,10 @@ public static class StatsHost {
       if (_zHwnd == IntPtr.Zero || _hwnd == IntPtr.Zero) return;
       if (hwnd != _zHwnd) return;   // v0.12.3:只认主窗口自身;侧栏切换重排会触发其它子 HWND 的
                                     // LOCATIONCHANGE,不滤则按旧烘焙偏移瞬移 = 抖动
+      if (evt == 0x8001) {   // v0.13p:主窗销毁(UI 消失同帧)——Electron 退出窗口先亡进程后死 ~2-3s
+        if (idObject == 0) PostMessageW(_hwnd, WM_APP_ZGONE, IntPtr.Zero, IntPtr.Zero);
+        return;
+      }
       ZRECT r; GetWindowRect2(_zHwnd, out r);
       // v0.13g 顶边居中:水平 = 窗口中心 - 半宽(resize 实时重算),垂直 = 窗口顶边
       // + 5 CSS px(用户拍板 2026-10-01;按本窗 DPI 换算物理偏移,跨屏视觉一致)
@@ -502,6 +511,7 @@ public static class StatsHost {
     } finally { ReleaseDC(IntPtr.Zero, dc); }
   }
   private const uint WM_APP_FOLLOW = 0x8064;
+  private const uint WM_APP_ZGONE = 0x8066;
   [DllImport("user32.dll")] private static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
 
   public static void MoveTo(int x, int y) {
@@ -528,6 +538,11 @@ public static class StatsHost {
         // v0.13o:ZCode 进程已终止(内核句柄 signaled)——先隐身(与 ZCode 视觉同帧)再清场
         ShowWindow(_hwnd, 0);
         if (OnQuit != null) { try { OnQuit(); } catch { } }
+        return IntPtr.Zero;
+      case WM_APP_ZGONE:
+        // v0.13p:ZCode 主窗已销毁(UI 消失同帧)——先隐身;进程死(内核看护)→退,进程活(窗口重建)→重吸附后复显
+        ShowWindow(_hwnd, 0);
+        if (OnZGone != null) { try { OnZGone(); } catch { } }
         return IntPtr.Zero;
       case WM_SIZE:
         if (_controller != null) {
@@ -574,6 +589,12 @@ WLog ('boot: init ' + $initX + ',' + $initY + ' ' + $script:winW + 'x' + $script
 }
 # v0.13o 生死绑定提速:ZCode 进程终止的内核信号(WndProc 已先 SW_HIDE)→ 清场退出
 [StatsHost]::OnQuit = { Stop-Widget 'zcode-process-dead' }
+# v0.13p:ZCode 主窗销毁信号(UI 消失同帧;WndProc 已先 SW_HIDE)——进程活=窗口重建期
+# (rescan ≤2.5s 重吸附后自动复显),进程死=内核看护随即触发,此处兜底直退
+[StatsHost]::OnZGone = {
+  if (-not (Test-ZcodeAlive)) { Stop-Widget 'zcode-window-gone' }
+  else { WLog 'zgone: window destroyed, proc alive (re-attach pending)' }
+}
 
 # ---- 页面消息:回执日志(主题应用/相位切换等) ----
 [StatsHost]::OnMessage = {
