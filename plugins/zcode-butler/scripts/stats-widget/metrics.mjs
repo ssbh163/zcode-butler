@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * metrics.mjs — v0.13f 性能浮标真数据采集器(码管家 stats-widget)
+ * metrics.mjs — v0.13q 性能浮标真数据采集器(码管家 stats-widget)
  * 需以 node --experimental-sqlite 启动(宿主 spawn 已带;node:sqlite 在 22.12 为实验特性)。
  *
  * 双通道架构(2026-09-29 定案,方案②):
@@ -8,12 +8,15 @@
  *             实测 216ms 节拍 10-70 字符/批,思考+文字边流边渲染),正增量追加
  *             ~/.zcode/stats-widget-live.jsonl {"t":ms,"chars":delta};本进程 tail 之。
  *   真值通道 = db.sqlite model_usage 表(只读):本轮平均 = Σoutput/Σ(duration−ttft),
- *             TTFT = 会话平均;并与 live 字符按 [started_at,completed_at] 时间窗对齐
- *             自校准 chars/token 比(初值 3.2,EMA)。
+ *             最近请求解码率 = 单行 output×1000÷(duration−ttft)(v0.2.71,与官方 Token
+ *             调试面板 calculateOutputTps 同口径);TTFT = 会话平均;并与 live 字符按
+ *             [started_at,completed_at] 时间窗对齐自校准 chars/token 比(初值 3.2,EMA)。
  * 已证伪勿回头:part 表 text/reasoning 行流式期间不增长(完成时一次性落库,实验
  *   part-trans.txt);"db.sqlite/WAL 流式冻结"是文件尺寸观测盲区,但行也不流式。
  * 偏差声明:①实时 token 数=字符/校准比(真值只在调用末);**实时通道已停用**
- *   (UIA 转录层与 stdio wrapper 两案皆败,等官方接口;tok/s 显示会话平均);
+ *   (UIA 转录层与 stdio wrapper 两案皆败,等官方接口;tok/s 回落链 = live ?? 最近
+ *   请求解码率 ?? 会话均值——流式中显示的是**上一完成请求**的解码率,当前请求落库
+ *   瞬间刷新,请求级近实时非逐 chunk,调查详见 docs/knowledge/2026-10-11-decode速度数据源调查.md);
  *   ②「当前会话」三信号(v0.13f):(a) **UIA 视图通道为主**——探针扫侧栏选中条目
  *   (bg-selected 的 task-row)写标题到 stats-widget-view.json,本进程查 db
  *   session.title 映射回会话(切回已驻留会话时 app log 静默,UIA 是唯一视图信号);
@@ -21,7 +24,7 @@
  *   model.request.started/turn.started 跟随(workflow 子代理 sess_dwf-* 永不接管);
  *   启动引导 = 最近 model_usage 写入者。三者汇入同一"切换 + 按 db 历史重建"。
  * 输出契约 ~/.zcode/stats-widget-metrics.json:
- *   {"t":ms,"phase":"idle|waiting|stream|done","tps":n|null,"turnAvg":n|null,"ttft":s|null}
+ *   {"t":ms,"phase":"idle|waiting|stream|done","tps":n|null(=live??最近请求??会话均值),"turnAvg":n|null,"ttft":s|null}
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,6 +56,7 @@ const ttftWin = [];             // 近期非空 ttft(显示中位数用,≤8)
 let lastKnownTtft = null;       // NULL-ttft 行的估算代理(同上下文规模最相近)
 let ratio = 3.2;                // chars per token(自校准)
 let lastTurnId = null;
+let lastReqTps = null;          // v0.2.71:最近完成请求的解码率(单行口径,官方 calculateOutputTps 同款)
 let phase = 'idle';
 let lastActivity = Date.now();
 let logTail = null;
@@ -136,10 +140,13 @@ function writeMetrics(force) {
   const live = liveTps(now);
   const sessAvg = tot.dec > 0 ? tot.out / (tot.dec / 1000) : null;
   const ta = turnAvgOf(lastTurnId);
+  // v0.2.71 回落链:live(已死)→ 最近完成请求解码率 → 会话均值。HTML"速度位合一"
+  // (2026-09-29 拍板:流式中显示实时速度=最近完成调用的解码率,done 切 turnAvg)
+  // 的原始意图至此闭环——live 死后旧实现回落错档到 sessAvg。
   const j = {
     t: now,
     phase,
-    tps: live ?? sessAvg,
+    tps: live ?? lastReqTps ?? sessAvg,
     turnAvg: ta === null ? null : Math.round(ta * 100) / 100,
     ttft: medianTtftSec(),
     calls: tot.ttftN,
@@ -181,6 +188,7 @@ function absorbRow(r) {
   turns.set(r.tid, t);
   if (turns.size > 20) turns.delete(turns.keys().next().value);
   tot.out += r.out; tot.dec += dec;
+  lastReqTps = r.out * 1000 / dec;   // v0.2.71:单行解码率(重建时按 rowid 顺序吸收,终值=该会话最近完成请求)
   if (r.ttft != null && r.ttft > 0) {
     tot.ttft += r.ttft; tot.ttftN++;
     lastKnownTtft = r.ttft;
@@ -202,7 +210,7 @@ function absorbRow(r) {
 function resetAggregates() {
   samples.length = 0; turns.clear();
   tot.out = 0; tot.dec = 0; tot.ttft = 0; tot.ttftN = 0;
-  ttftWin.length = 0; lastKnownTtft = null; lastTurnId = null;
+  ttftWin.length = 0; lastKnownTtft = null; lastTurnId = null; lastReqTps = null;
 }
 
 // v0.13e 会话切换:按 db 历史整体重建目标会话聚合——切换/恢复会话立即显示该会话

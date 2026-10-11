@@ -385,6 +385,44 @@ zcode-butler/                          ← 仓库根(插件市场)
 
 - macOS 悬浮窗(二期)、资讯自动抓取、双便宜模型交替摘要、悬浮窗穿透点击、多显示器分别贴边、移动端、**本次会话 token 消耗指示(已评估,用户否决)**、Chat2Doc 二次成文/三模板(已砍,只做素材归档)。
 
+## 15. UI 插件面板迁移蓝图(待命,2026-10-11 冻结)
+
+> 状态:**待命**——设计完备、未开发。触发条件 = 官方落地 `ui.surfaces` auto-open(`availability:"workspace"` 或 `autoOpen:true`)或侧栏 tab 跨重启持久化(监视 zai-org/feedback Issue A/B,链接见 [docs/knowledge/2026-10-11-ZCode-UI插件协议调查.md](./docs/knowledge/2026-10-11-ZCode-UI插件协议调查.md))。协议调查、打开语义穷尽验证、官方示例与坑全部在该 knowledge 文档,此处只留执行蓝图。
+
+### 15.1 架构
+
+```
+面板页(zcode-sandbox:// 沙箱内单文件 HTML,四环 SVG 移植)
+  │ ext-apps App: readServerResource("butler://status") / callServerTool
+  ▼ 宿主桥 → RPC mcp/uiReadResource / mcp/uiCallTool
+插件 MCP server(node ui-plugin/dist/server.mjs,isolation:"workspace" 跨会话共享)
+  │ spawn node ${ZCODE_PLUGIN_ROOT}/scripts/status.mjs --json --cache-ttl 3
+  ▼
+现有数据层不动(api.mjs 凭据链 → 智谱三接口 / butler.json / news.json)→ protocol v1
+```
+
+核心决策:①server 是薄壳,spawn 现有 status.mjs 取数(面板=protocol 第 5 消费者,数据层零改动);②数据走资源通道(8MiB)不走工具结果(cache 实测 36.7KB 贴近 structuredContent 64KiB 上限);③构建期 devDeps(esbuild + @modelcontextprotocol/sdk@1.29.0 + ext-apps@2.0.0 精确锁版)产物 dist/ 入库,运行时零依赖——**届时把 AGENTS"零 npm"红线改写为"运行时零依赖"**;④模型路径=面板自动打开口:`butler_status` 工具(visibility model+app,`_meta.ui` 指向面板)返回 `--hook` 同款一行摘要。
+
+### 15.2 manifest 增量(v0.3.0)
+
+见 knowledge 文档 §1.1 样例(mcpServers.butler + ui.surfaces[0],icon="gauge")。
+
+### 15.3 server 工具面(v1)
+
+资源:`ui://zcode-butler/panel.html`(静态)、`butler://status`(动态 spawn,3min 共享缓存,原子写 temp+rename 防多会话撕裂);工具:`butler_status`(model+app)/`butler_news_mark`(app)/`butler_refresh`(app 绕缓存)。纪律:stdout 仅协议、日志 stderr、优雅关闭、子进程 await 短命不 detach。
+
+### 15.4 面板 UI v1
+
+移植 butler-widget.html 四环+水位四档色+hover 弹框+资讯列表+↻刷新,横胶囊改竖面板;**不移植**:两桥(shape/NCHITTEST)、ztheme 采样(改 onhostcontextchanged)、DPI 补偿、眼神动画/星空(可选二期)、notify toast(用户不要系统通知)。新增:5min 页面轮询+手动刷新+骨架屏。
+
+### 15.5 阶段
+
+spike(独立插件名缓存实验)→ 数据通道 → 面板移植 → **切换 0.3.0**(SessionStart 摘除 widget-launch,悬浮窗文件保留一版作回滚)→ 清理 0.3.1+(删 widget/ 全套与相关红线,EPERM 五件套/帧级跟随/DPI 补偿退役)。前置:核对无未验收缓存实验、缓存对齐仓库基线。开发循环坑:同版本重装才刷新代码副本。
+
+### 15.6 随迁移退役的维护面
+
+帧级跟随(WinEvent→PostMessage→WndProc)、WebView2 staging/EPERM 五件套、DPI 坐标补偿、PrintWindow 截图、互斥量换代对账、vbs 逃 Job、ztheme 采样、两桥铁律章节——约 1400 行 PS1 内联 C# + 宿主对抗逻辑。
+
 ---
 
 > **关联文档:** 项目宪法 → [AGENTS.md](./AGENTS.md) · 门面 → [README.md](./README.md) · 现状(开发后写)→ [WIKI.md](./WIKI.md) · 过程记录(唯一时间线,曾用名 DEV RECORD.md)→ [开发日志.md](./开发日志.md)
